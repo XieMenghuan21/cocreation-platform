@@ -3,10 +3,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from app.api.deps import require_auth
+from app.core.identity import auth_user_id
+from app.db.session import get_db
 from app.schemas.industrial_design import IndustrialDesignWorkflowRequest
 from app.services.cad_ai_gateway_service import CadAiGatewayError
+from app.services.design_review_service import (
+    DesignReviewServiceError,
+    design_review_service,
+)
+from app.services.engineering_package_service import (
+    EngineeringPackageServiceError,
+    engineering_package_service,
+)
 from app.services.industrial_design_workflow_service import industrial_design_workflow_service
 from app.utils.response import error_response, success_response
 
@@ -23,6 +34,62 @@ async def create_industrial_design_workflow(
         result = await industrial_design_workflow_service.create_workflow(request, auth_user=auth_user)
         return success_response(data=result, message="工业品设计工作流已创建")
     except CadAiGatewayError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_response(
+                message=exc.message,
+                code=exc.status_code,
+                error_code=exc.error_code,
+            ),
+        )
+
+
+@router.post("/workflows/{task_id}/engineering-package", response_model=dict, summary="导出工程设计包")
+def create_engineering_package(
+    task_id: str,
+    db: Session = Depends(get_db),
+    auth_user: dict[str, object] = Depends(require_auth),
+) -> dict[str, object] | JSONResponse:
+    """把任务产物打包为可交付的工程设计包（zip：设计说明 + 图纸 + 数模 + BOM）。"""
+    user_id = auth_user_id(auth_user)
+    try:
+        result = engineering_package_service.build_package(
+            db=db,
+            user_id=user_id,
+            task_id=task_id,
+            publish_assets=True,
+        )
+        db.commit()
+        return success_response(data=result, message="工程设计包已生成")
+    except EngineeringPackageServiceError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_response(
+                message=exc.message,
+                code=exc.status_code,
+                error_code=exc.error_code,
+            ),
+        )
+
+
+@router.post("/workflows/{task_id}/design-review", response_model=dict, summary="生成设计审查报告")
+async def create_design_review(
+    task_id: str,
+    db: Session = Depends(get_db),
+    auth_user: dict[str, object] = Depends(require_auth),
+) -> dict[str, object] | JSONResponse:
+    """对任务 3D 模型执行几何规则检查并生成设计审查报告（PDF）。"""
+    user_id = auth_user_id(auth_user)
+    try:
+        result = await design_review_service.create_review(
+            db=db,
+            user_id=user_id,
+            task_id=task_id,
+            publish_assets=True,
+        )
+        db.commit()
+        return success_response(data=result, message="设计审查报告已生成")
+    except DesignReviewServiceError as exc:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_response(
