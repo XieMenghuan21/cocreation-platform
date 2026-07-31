@@ -12,6 +12,8 @@ import type {
   CoCreationScenario,
   ScenarioConfig,
   ScenarioTab,
+  WorkspaceStepId,
+  WorkspaceStepMeta,
 } from './CoCreationAgentWorkspace.types';
 
 export const acceptedCadImportExtensions = ['step', 'stp', 'stl', 'dxf', 'dwg', 'pdf', 'png', 'jpg', 'jpeg', 'webp'];
@@ -360,6 +362,74 @@ export const scenarioConfigs: Record<CoCreationScenario, ScenarioConfig> = {
     toneClass: 'from-emerald-500 to-teal-600',
   },
 };
+
+export const workspaceSteps: WorkspaceStepMeta[] = [
+  {
+    id: 'reference',
+    label: '参考图/文字',
+    shortLabel: '参考',
+    description: '上传参考素材或填写文字描述',
+    scenario: 'design',
+    toneClass: 'from-cyan-500 to-blue-600',
+    generateable: false,
+  },
+  {
+    id: 'plan2d',
+    label: '2D 平面图',
+    shortLabel: '平面图',
+    description: '生成 CAD 线图（SVG + DXF）',
+    scenario: 'design',
+    toneClass: 'from-cyan-500 to-blue-600',
+    generateable: true,
+  },
+  {
+    id: 'designImage',
+    label: '设计图',
+    shortLabel: '设计图',
+    description: 'AI 渲染效果图',
+    scenario: 'design',
+    toneClass: 'from-cyan-500 to-blue-600',
+    generateable: true,
+  },
+  {
+    id: 'refineImage',
+    label: '精修图',
+    shortLabel: '精修图',
+    description: '商业精修产品图',
+    scenario: 'propaganda',
+    toneClass: 'from-violet-500 to-fuchsia-600',
+    generateable: true,
+  },
+  {
+    id: 'fusionImage',
+    label: '场景融合图',
+    shortLabel: '融合图',
+    description: '产品场景合成图',
+    scenario: 'propaganda',
+    toneClass: 'from-violet-500 to-fuchsia-600',
+    generateable: true,
+  },
+  {
+    id: 'model3d',
+    label: '3D 打样',
+    shortLabel: '3D 打样',
+    description: '3D 数模 + 多视角渲染',
+    scenario: 'production',
+    toneClass: 'from-emerald-500 to-teal-600',
+    generateable: true,
+  },
+  {
+    id: 'stepFile',
+    label: 'STEP 图',
+    shortLabel: 'STEP 图',
+    description: 'STEP 数模导出',
+    scenario: 'production',
+    toneClass: 'from-emerald-500 to-teal-600',
+    generateable: true,
+  },
+];
+
+export const workspaceStepIds: WorkspaceStepId[] = workspaceSteps.map((step) => step.id);
 
 export const scenarioTabs: ScenarioTab[] = [
   { id: 'design', label: '设计', description: '参考图、文字到 2D 平面图和设计图' },

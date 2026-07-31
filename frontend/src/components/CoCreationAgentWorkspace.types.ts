@@ -15,6 +15,33 @@ export type WorkspaceSubpage = 'overview' | 'planning' | 'modeling' | 'assets' |
 export type RefineType = 'appearance' | 'structure' | 'concept';
 export type CoCreationScenario = 'design' | 'propaganda' | 'production';
 export type WorkflowStage = CoCreationScenario;
+export type WorkspaceStepId =
+  | 'reference'    // 参考图/文字
+  | 'plan2d'       // 2D 平面图
+  | 'designImage'  // 设计图
+  | 'refineImage'  // 精修图
+  | 'fusionImage'  // 场景融合图
+  | 'model3d'      // 3D 打样
+  | 'stepFile';    // STEP 图
+export type StepRunStatus = 'idle' | 'running' | 'completed' | 'failed';
+
+export interface StepState {
+  status: StepRunStatus;
+  taskId?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkspaceStepMeta {
+  id: WorkspaceStepId;
+  label: string;
+  shortLabel: string;
+  description: string;
+  scenario: CoCreationScenario;
+  toneClass: string;
+  generateable: boolean;
+}
 
 export interface ScenarioConfig {
   label: string;

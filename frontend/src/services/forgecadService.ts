@@ -259,6 +259,9 @@ export type IndustrialDesignInputType = 'text' | 'voice' | 'drawing' | 'cad' | '
 
 export interface IndustrialDesignWorkflowOptions extends CadAiAutoGenerateOptions {
   generateCad: boolean;
+  generatePlanLine?: boolean;
+  generateRenderViews?: boolean;
+  cadProvider?: string | null;
   generateThreePreview: boolean;
   optimizePrompt?: boolean;
   imageModel?: string | null;

@@ -1,4 +1,4 @@
-import { industryCatalog, scenarioConfigs } from './CoCreationAgentWorkspace.constants';
+import { industryCatalog, scenarioConfigs, workspaceSteps } from './CoCreationAgentWorkspace.constants';
 import type {
   CoCreationScenario,
   VersionSnapshot,
@@ -9,6 +9,8 @@ import type {
   IndustryLeaf,
   ProjectLibraryItem,
   AssetLibraryItem,
+  WorkspaceStepId,
+  StepState,
 } from './CoCreationAgentWorkspace.types';
 import type {
   CadAiTaskStatus,
@@ -19,7 +21,6 @@ import type {
 import { normalizePreviewImageSource } from '../utils/previewImage';
 
 export const buildScenarioFlow = (scenario: CoCreationScenario): string[] => scenarioConfigs[scenario].steps;
-
 export const getScenarioStepLabel = (scenario: CoCreationScenario, stepIndex: number): string => {
   const steps = scenarioConfigs[scenario].steps;
   if (steps.length === 0) {
@@ -27,6 +28,103 @@ export const getScenarioStepLabel = (scenario: CoCreationScenario, stepIndex: nu
   }
   const boundedIndex = Math.max(0, Math.min(stepIndex, steps.length - 1));
   return steps[boundedIndex] || '';
+};
+
+export const getWorkspaceStepMeta = (stepId: WorkspaceStepId) => workspaceSteps.find((step) => step.id === stepId);
+
+export const getWorkspaceStepIndex = (stepId: WorkspaceStepId): number =>
+  workspaceSteps.findIndex((step) => step.id === stepId);
+
+export const isWorkspaceStepId = (value: string | null | undefined): value is WorkspaceStepId =>
+  typeof value === 'string' && workspaceSteps.some((step) => step.id === value);
+
+export const getScenarioFromStep = (stepId: WorkspaceStepId): CoCreationScenario =>
+  workspaceSteps.find((step) => step.id === stepId)?.scenario || 'design';
+
+export interface StepWorkflowOptions {
+  generateCad: boolean;
+  generatePlanLine: boolean;
+  generateRenderViews: boolean;
+  generateDrawing: boolean;
+  generateThreePreview: boolean;
+  generateRender: boolean;
+  generateExplosion: boolean;
+  enhanceImage: boolean;
+  generateTrellisAsset: boolean;
+  optimizePrompt: boolean;
+}
+
+export const getStepWorkflowOptions = (stepId: WorkspaceStepId): StepWorkflowOptions => {
+  const base = {
+    generateCad: false,
+    generatePlanLine: false,
+    generateRenderViews: false,
+    generateDrawing: false,
+    generateThreePreview: false,
+    generateRender: false,
+    generateExplosion: false,
+    enhanceImage: false,
+    generateTrellisAsset: false,
+    optimizePrompt: true,
+  };
+  switch (stepId) {
+    case 'reference':
+      return base;
+    case 'plan2d':
+      return { ...base, generatePlanLine: true };
+    case 'designImage':
+      return { ...base, generateDrawing: true };
+    case 'refineImage':
+      return { ...base, generateRender: true, enhanceImage: true };
+    case 'fusionImage':
+      return { ...base, generateRender: true, enhanceImage: false };
+    case 'model3d':
+      return {
+        ...base,
+        generateCad: true,
+        generateThreePreview: true,
+        generateRenderViews: true,
+      };
+    case 'stepFile':
+      return { ...base, generateCad: true, generateThreePreview: true };
+    default:
+      return base;
+  }
+};
+
+const STEP_OUTPUT_KEYS: Record<Exclude<WorkspaceStepId, 'reference'>, string[]> = {
+  plan2d: ['planLine', 'planLineSvgAssetId'],
+  designImage: ['renderPng', 'renderPngAssetId'],
+  refineImage: ['enhancedImage', 'enhancedImageAssetId'],
+  fusionImage: ['renderPng', 'renderPngAssetId'],
+  model3d: ['modelGlb', 'modelStl', 'modelStep', 'modelDownloadUrl', 'renderViews'],
+  stepFile: ['modelStep', 'modelStepAssetId', 'modelDownloadUrl'],
+};
+
+const stepHasOutput = (outputs: Record<string, unknown> | null | undefined, stepId: WorkspaceStepId): boolean => {
+  if (!outputs || stepId === 'reference') {
+    return stepId === 'reference';
+  }
+  const keys = STEP_OUTPUT_KEYS[stepId] || [];
+  return keys.some((key) => {
+    const value = outputs[key];
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return Boolean(value);
+  });
+};
+
+export const deriveStepStatesFromOutputs = (
+  outputs: Record<string, unknown> | null | undefined,
+): Record<WorkspaceStepId, StepState> => {
+  const states = {} as Record<WorkspaceStepId, StepState>;
+  workspaceSteps.forEach((step) => {
+    states[step.id] = {
+      status: stepHasOutput(outputs, step.id) ? 'completed' : 'idle',
+    };
+  });
+  return states;
 };
 
 const COMPLETED_STATUSES = new Set(['已完成', 'completed']);
@@ -340,6 +438,7 @@ export const buildCadAiGeneratedAssets = (outputs: Record<string, unknown> | nul
     { key: 'modelStep', idKey: 'modelStepAssetId', name: 'STEP 模型', assetType: 'step' },
     { key: 'modelStl', idKey: 'modelStlAssetId', name: 'STL 模型', assetType: 'stl' },
     { key: 'modelGlb', idKey: 'modelGlbAssetId', name: 'GLB 模型', assetType: 'glb' },
+    { key: 'planLine', idKey: 'planLineSvgAssetId', name: '2D 线图', assetType: 'svg' },
     { key: 'drawingSvg', idKey: 'drawingSvgAssetId', name: 'SVG 工程图', assetType: 'svg' },
     { key: 'drawingPdf', idKey: 'drawingPdfAssetId', name: 'PDF 工程图', assetType: 'pdf' },
     { key: 'drawingDxf', idKey: 'drawingDxfAssetId', name: 'DXF 工程图', assetType: 'dxf' },
@@ -456,7 +555,7 @@ export const buildCadAiVersionSnapshot = (
   const progress = typeof task.progress === 'number' ? `${task.progress}%` : '100%';
   const resultText = task.currentStep || task.error || `项目「${projectName || task.projectId}」${task.status}，进度 ${progress}`;
   const previewImageUrl = normalizePreviewImageSource(
-    getCadAiAssetUrl(outputs, ['renderPng', 'drawingSvg', 'enhancedImage']),
+    getCadAiAssetUrl(outputs, ['renderPng', 'drawingSvg', 'enhancedImage', 'planLine', 'renderViewsPreview']),
   );
   const scriptAssetId = getCadAiAssetId(outputs, ['modelScriptAssetId']);
   const outputAssetId = getCadAiAssetId(outputs, [
@@ -465,10 +564,12 @@ export const buildCadAiVersionSnapshot = (
     'drawingSvgAssetId',
     'modelGlbAssetId',
     'modelStepAssetId',
+    'planLineSvgAssetId',
   ]);
   const generatedImageUrls = [
     normalizePreviewImageSource(getCadAiAssetUrl(outputs, ['renderPng'])),
     normalizePreviewImageSource(getCadAiAssetUrl(outputs, ['enhancedImage'])),
+    normalizePreviewImageSource(getCadAiAssetUrl(outputs, ['renderViewsPreview'])),
   ].filter((value): value is string => Boolean(value));
 
   return {

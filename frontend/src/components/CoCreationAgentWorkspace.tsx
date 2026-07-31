@@ -21,7 +21,6 @@ import {
   ScanSearch,
   Sliders,
   Sparkles,
-  Square,
   UploadCloud,
   Workflow,
   Wrench,
@@ -83,6 +82,9 @@ import type {
   CadAiWorkflowState,
   RefineType,
   VersionSnapshot as VersionSnapshotType,
+  WorkspaceStepId,
+  StepState,
+  WorkspaceStepMeta,
 } from './CoCreationAgentWorkspace.types';
 import {
   acceptedCadImportExtensions,
@@ -99,7 +101,7 @@ import {
   workspacePreviewImageClass,
   workspacePreviewImageFrameClass,
   scenarioConfigs,
-  scenarioTabs,
+  workspaceSteps,
 } from './CoCreationAgentWorkspace.constants';
 import {
   normalizeVersionSnapshots,
@@ -120,6 +122,10 @@ import {
   buildProjectId,
   ensureUniqueProjectName,
   extractAssetIdFromWorkflowReference,
+  getWorkspaceStepMeta,
+  getScenarioFromStep,
+  getStepWorkflowOptions,
+  deriveStepStatesFromOutputs,
 } from './CoCreationAgentWorkspace.helpers';
 import PreviewImage from './PreviewImage';
 import { DxfPreview, StepProxyPreview, ExplodedPreview } from './CadPreviewComponents';
@@ -251,6 +257,10 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
   const [activeScenario, setActiveScenario] = useState<CoCreationScenario>('design');
   const [activeWorkflowStage, setActiveWorkflowStage] = useState<WorkflowStage>('design');
   const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [activeStepId, setActiveStepId] = useState<WorkspaceStepId>('reference');
+  const [stepStates, setStepStates] = useState<Record<WorkspaceStepId, StepState>>(
+    () => deriveStepStatesFromOutputs(null),
+  );
   const [isSubmittingForgeCad, setIsSubmittingForgeCad] = useState(false);
   const [versionSnapshots, setVersionSnapshots] = useState<VersionSnapshot[]>([]);
   const [, setWorkspaceState] = useState<WorkspaceState | null>(null);
@@ -306,6 +316,10 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
       setActiveWorkflowStage(state.activeWorkflowStage);
     }
     setActiveStepIndex(state.activeStepIndex);
+    const restoredStepId = workspaceSteps.find(
+      (step) => step.scenario === state.activeScenario,
+    )?.id;
+    setActiveStepId(restoredStepId || 'reference');
     if (state.viewMode === 'cad' || state.viewMode === 'preview3d' || state.viewMode === 'exploded') {
       setViewMode(state.viewMode);
     }
@@ -748,6 +762,15 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
     [selectedIndustry],
   );
   const currentSubmitActionLabel = useMemo(() => {
+    if (activeStepId === 'refineImage' || activeStepId === 'fusionImage') {
+      return '生成精修图';
+    }
+    if (activeStepId === 'model3d' || activeStepId === 'stepFile') {
+      return '生成 3D 打样';
+    }
+    if (activeStepId === 'plan2d' || activeStepId === 'designImage') {
+      return '生成设计图';
+    }
     if (activeScenario === 'propaganda') {
       return '生成精修图';
     }
@@ -755,7 +778,7 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
       return '生成 3D 打样';
     }
     return '生成方案';
-  }, [activeScenario]);
+  }, [activeScenario, activeStepId]);
 
   const latestGeneratedVersion = versionSnapshots.find((version) => Boolean(version.taskId)) || null;
   const latestModelObjects = latestGeneratedVersion?.modelObjects || [];
@@ -796,6 +819,7 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
           setWorkflowNotice(task.error || currentStep);
 
           if (task.status === 'completed' || task.status === 'failed') {
+            setStepStates(deriveStepStatesFromOutputs(outputs));
             if (task.status === 'failed') {
               setSubmitFeedback({
                 title: '生成失败',
@@ -1087,12 +1111,15 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
   };
 
   const submitIndustrialDesignWorkflow = async (
-    source: 'create' | 'toolbar' = 'create',
+    source: 'create' | 'toolbar' | 'step' = 'create',
     stage: WorkflowStage = 'design',
+    stepId?: WorkspaceStepId,
   ) => {
+    const resolvedStage = stepId ? getScenarioFromStep(stepId) : stage;
+    const stepOptions = stepId ? getStepWorkflowOptions(stepId) : null;
     const { nextIndustry, nextName, description } = resolveProjectDraft();
     const { inputType, workflowAsset } = resolveIndustrialDesignInput();
-    const propagandaReferenceValues = stage === 'propaganda'
+    const propagandaReferenceValues = resolvedStage === 'propaganda'
       ? [
           selectedReferenceAsset?.outputAssetId || '',
           ...(selectedReferenceAsset?.generatedAssets?.map((asset) => asset.assetId || asset.downloadUrl || asset.path || '') || []),
@@ -1130,8 +1157,8 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
     try {
       await persistWorkspace({
         selectedProjectId: persistedProjectId,
-        activeWorkflowStage: stage,
-        activeScenario: stage,
+        activeWorkflowStage: resolvedStage,
+        activeScenario: resolvedStage,
         activeStepIndex: 0,
         viewMode: inputType === 'drawing' || inputType === 'cad' || inputType === 'pdf' ? 'cad' : 'preview3d',
         selectedIndustry: nextIndustry,
@@ -1148,32 +1175,39 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
       setIsSubmittingForgeCad(false);
       return;
     }
-    setActiveWorkflowStage(stage);
+    setActiveWorkflowStage(resolvedStage);
     setCurrentProjectName(nextName);
     setSelectedIndustry(nextIndustry);
     setTaskStatus('正在提交工业品设计工作流');
     setWorkflowNotice(
-      stage === 'design'
+      resolvedStage === 'design'
         ? '正在根据文字或参考图片生成 2D 设计图。'
-        : stage === 'propaganda'
+        : resolvedStage === 'propaganda'
           ? '正在基于已确认的设计图生成精修图。'
           : '正在基于已确认的设计图生成 3D 打样和 STEP/CAD。',
     );
     setIsCreateOpen(false);
-    setActiveScenario(stage);
+    setActiveScenario(resolvedStage);
     setActiveStepIndex(0);
+    if (stepId) {
+      setActiveStepId(stepId);
+      setStepStates((prev) => ({
+        ...prev,
+        [stepId]: { status: 'running', taskId: undefined, startedAt: new Date().toISOString() },
+      }));
+    }
     setViewMode(inputType === 'drawing' || inputType === 'cad' || inputType === 'pdf' ? 'cad' : 'preview3d');
     setSubmitFeedback({
       title:
         source === 'create'
-          ? stage === 'design'
+          ? resolvedStage === 'design'
             ? '正在生成设计方案'
-            : stage === 'propaganda'
+            : resolvedStage === 'propaganda'
               ? '正在生成精修图'
               : '正在生成 3D 打样'
-          : stage === 'design'
+          : resolvedStage === 'design'
             ? '正在提交方案生成'
-            : stage === 'propaganda'
+            : resolvedStage === 'propaganda'
               ? '正在提交精修图生成'
               : '正在提交 3D 打样生成',
       detail: '系统正在整理设计需求、解析输入资产，并提交统一工业品设计任务。',
@@ -1212,14 +1246,16 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
           uploadIntent: projectDraft.inputMode === 'upload' ? projectDraft.uploadIntent : undefined,
         },
         options: {
-          generateCad: stage === 'production',
-          generateDrawing: stage === 'design',
-          generateThreePreview: stage === 'production',
-          generateRender: stage === 'propaganda',
-          generateExplosion: false,
-          enhanceImage: stage === 'propaganda',
-          optimizePrompt: true,
-          generateTrellisAsset: false,
+          generateCad: stepOptions ? stepOptions.generateCad : resolvedStage === 'production',
+          generatePlanLine: stepOptions ? stepOptions.generatePlanLine : false,
+          generateRenderViews: stepOptions ? stepOptions.generateRenderViews : false,
+          generateDrawing: stepOptions ? stepOptions.generateDrawing : resolvedStage === 'design',
+          generateThreePreview: stepOptions ? stepOptions.generateThreePreview : resolvedStage === 'production',
+          generateRender: stepOptions ? stepOptions.generateRender : resolvedStage === 'propaganda',
+          generateExplosion: stepOptions ? stepOptions.generateExplosion : false,
+          enhanceImage: stepOptions ? stepOptions.enhanceImage : resolvedStage === 'propaganda',
+          optimizePrompt: stepOptions ? stepOptions.optimizePrompt : true,
+          generateTrellisAsset: stepOptions ? stepOptions.generateTrellisAsset : false,
           imageModel: selectedImageModelId === 'auto' ? null : selectedImageModelId,
           imageProvider: selectedImageModelId === 'auto'
             ? null
@@ -1248,15 +1284,23 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
           : null,
       );
       const terminalStepIndex = task.status === 'completed'
-        ? stage === 'design' ? 2 : 1
+        ? resolvedStage === 'design' ? 2 : 1
         : 0;
       await persistWorkspace({
-        activeScenario: stage,
-        activeWorkflowStage: stage,
+        activeScenario: resolvedStage,
+        activeWorkflowStage: resolvedStage,
         activeStepIndex: terminalStepIndex,
       });
-      setActiveScenario(stage);
+      setActiveScenario(resolvedStage);
       setActiveStepIndex(terminalStepIndex);
+      if (stepId) {
+        setStepStates((prev) => ({
+          ...prev,
+          [stepId]: task.status === 'completed'
+            ? { status: 'completed', taskId: task.taskId, completedAt: new Date().toISOString() }
+            : { status: 'failed', taskId: task.taskId, error: task.error || undefined, completedAt: new Date().toISOString() },
+        }));
+      }
       if (task.status === 'completed' || task.status === 'failed') {
         const projectId = nextProjectId;
         const snapshot = buildCadAiVersionSnapshot(task, versionSnapshots, projectId, nextName, generationPrompt);
@@ -1570,6 +1614,7 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
       setRefineNote('');
       setActiveScenario('design');
       setActiveStepIndex(2);
+      setActiveStepId('designImage');
     } catch (error) {
       const message = error instanceof Error ? error.message : `${typeLabel}提交失败，请稍后重试。`;
       setTaskStatus(`${typeLabel}任务提交失败`);
@@ -1591,7 +1636,8 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
   };
 
   const currentScenarioConfig = scenarioConfigs[activeScenario];
-  const currentStepTitle = getScenarioStepLabel(activeScenario, activeStepIndex);
+  const activeStepMeta = getWorkspaceStepMeta(activeStepId);
+  const currentStepTitle = activeStepMeta?.label || getScenarioStepLabel(activeScenario, activeStepIndex);
   const previewVersionImageUrl = selectedPreviewVersion?.previewImageUrl || selectedPreviewVersion?.generatedImageUrls?.[0] || selectedPreviewVersion?.downloadUrl || '';
   const imagePromptMeta = (() => {
     const raw = cadAiWorkflow?.outputs?.imagePromptMeta;
@@ -1686,9 +1732,225 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
           : '排队中'
     : null;
 
+  const handleActiveStepGenerate = (): void => {
+    const stepMeta = getWorkspaceStepMeta(activeStepId);
+    if (!stepMeta || !stepMeta.generateable) {
+      void submitIndustrialDesignWorkflow('toolbar', activeScenario);
+      return;
+    }
+    const stepState = stepStates[stepMeta.id];
+    if (stepState.status === 'running') {
+      return;
+    }
+    void submitIndustrialDesignWorkflow('step', getScenarioFromStep(stepMeta.id), stepMeta.id);
+  };
+
+  const handleStepClick = (step: WorkspaceStepMeta): void => {
+    const stepState = stepStates[step.id];
+    const scenarioStepIndex = workspaceSteps
+      .filter((item) => item.scenario === step.scenario)
+      .findIndex((item) => item.id === step.id);
+    const applyStepFocus = (): void => {
+      setActiveStepId(step.id);
+      setActiveScenario(step.scenario);
+      setActiveStepIndex(Math.max(0, scenarioStepIndex));
+      setActiveWorkflowStage(step.scenario);
+    };
+    if (!step.generateable) {
+      applyStepFocus();
+      return;
+    }
+    if (stepState.status === 'idle') {
+      void submitIndustrialDesignWorkflow('step', getScenarioFromStep(step.id), step.id);
+      return;
+    }
+    applyStepFocus();
+  };
+
   const renderWorkspacePreview = () => {
     if (viewMode === 'exploded') {
       return <ExplodedPreview steps={activeExplosionSteps} />;
+    }
+    const stepOutputs = cadAiWorkflow?.outputs || null;
+    if (activeStepId === 'reference') {
+      return (
+        <div className={`relative flex ${workspacePreviewHeightClass} items-center justify-center overflow-hidden rounded-lg bg-white p-4`}>
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-6 text-center shadow-sm">
+            <ScanSearch className="mx-auto h-12 w-12 text-blue-500" />
+            <div className="mt-4 text-lg font-extrabold text-slate-900">参考图 / 文字</div>
+            <div className="mt-2 text-sm leading-6 text-slate-500">
+              在左侧填写设计描述或上传参考素材，作为后续各步骤生成的设计依据。
+            </div>
+            {importedCadAsset ? (
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-left">
+                <div className="truncate text-sm font-semibold text-slate-900">{importedCadAsset.filename}</div>
+                <div className="mt-1 text-xs text-slate-500">{importedCadAsset.extension.toUpperCase()} · {formatFileSize(importedCadAsset.sizeBytes)}</div>
+              </div>
+            ) : selectedReferenceAsset?.previewImageUrl ? (
+              <div className="mt-4 overflow-hidden rounded-xl border border-blue-100 bg-white">
+                <PreviewImage src={selectedReferenceAsset.previewImageUrl} alt="参考资产" className="h-44 w-full object-contain" />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+    if (activeStepId === 'plan2d') {
+      const planSvg = getCadAiOutputValue(stepOutputs, ['planLine', 'planLineSvg']);
+      if (planSvg) {
+        const responsiveSvg = planSvg.replace(
+          /<svg([^>]*)>/,
+          (_match: string, attrs: string) => {
+            let cleaned = attrs.replace(/\s*width\s*=\s*"[^"]*"/, '');
+            cleaned = cleaned.replace(/\s*height\s*=\s*"[^"]*"/, '');
+            cleaned += ' style="max-width:100%;height:auto;display:block;margin:0 auto"';
+            return `<svg${cleaned}>`;
+          },
+        );
+        return (
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold text-blue-600">2D 平面图 · CAD 线图</span>
+              {getCadAiOutputValue(stepOutputs, ['planLineDxf']) ? (
+                <a
+                  href={getCadAiOutputValue(stepOutputs, ['planLineDxf']) as string}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[10px] font-semibold text-slate-400 transition hover:text-blue-600"
+                >
+                  下载 DXF
+                </a>
+              ) : null}
+            </div>
+            <div className="flex items-start justify-center w-full overflow-hidden" dangerouslySetInnerHTML={{ __html: responsiveSvg }} />
+          </div>
+        );
+      }
+    }
+    if (activeStepId === 'designImage') {
+      const designUrl = normalizePreviewImageSource(
+        getCadAiOutputValue(stepOutputs, ['renderPng']),
+      );
+      if (designUrl) {
+        return (
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 text-xs font-bold text-blue-600">设计图 · AI 渲染效果图</div>
+            <div className={workspacePreviewImageFrameClass}>
+              <PreviewImage src={designUrl} alt="AI 设计图" className={workspacePreviewImageClass} />
+            </div>
+          </div>
+        );
+      }
+    }
+    if (activeStepId === 'refineImage') {
+      const refineUrl = normalizePreviewImageSource(
+        getCadAiOutputValue(stepOutputs, ['enhancedImage']),
+      );
+      if (refineUrl) {
+        return (
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 text-xs font-bold text-blue-600">精修图 · 商业精修产品图</div>
+            <div className={workspacePreviewImageFrameClass}>
+              <PreviewImage src={refineUrl} alt="精修图" className={workspacePreviewImageClass} />
+            </div>
+          </div>
+        );
+      }
+    }
+    if (activeStepId === 'fusionImage') {
+      const fusionUrl = normalizePreviewImageSource(
+        getCadAiOutputValue(stepOutputs, ['renderPng']),
+      );
+      if (fusionUrl) {
+        return (
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 text-xs font-bold text-blue-600">场景融合图 · 产品场景合成</div>
+            <div className={workspacePreviewImageFrameClass}>
+              <PreviewImage src={fusionUrl} alt="场景融合图" className={workspacePreviewImageClass} />
+            </div>
+          </div>
+        );
+      }
+    }
+    if (activeStepId === 'model3d') {
+      const renderViews = Array.isArray(stepOutputs?.renderViews)
+        ? (stepOutputs.renderViews as Array<Record<string, unknown>>)
+        : [];
+      if (renderViews.length > 0) {
+        return (
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold text-blue-600">3D 打样 · 多视角渲染</span>
+              <span className="text-[10px] text-slate-400">{renderViews.length} 张</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {renderViews.map((view) => {
+                const url = view.url as string | undefined;
+                if (!url) return null;
+                return (
+                  <div key={view.key as string} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <PreviewImage src={url} alt={view.label as string} className="h-40 w-full object-contain" />
+                    <div className="border-t border-slate-100 px-2 py-1.5 text-center text-[10px] font-semibold text-slate-500">
+                      {view.label as string}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {getCadAiOutputValue(stepOutputs, ['modelStl']) ? (
+                <a
+                  href={getCadAiOutputValue(stepOutputs, ['modelStl']) as string}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                >
+                  下载 STL
+                </a>
+              ) : null}
+              {getCadAiOutputValue(stepOutputs, ['modelStep']) ? (
+                <a
+                  href={getCadAiOutputValue(stepOutputs, ['modelStep']) as string}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                >
+                  下载 STEP
+                </a>
+              ) : null}
+            </div>
+          </div>
+        );
+      }
+      const stlUrl = normalizePreviewImageSource(getCadAiOutputValue(stepOutputs, ['modelStl']));
+      if (stlUrl) {
+        return <GeneratedStlPreview downloadUrl={stlUrl} />;
+      }
+    }
+    if (activeStepId === 'stepFile') {
+      const stepUrl = getCadAiOutputValue(stepOutputs, ['modelStep', 'modelDownloadUrl']);
+      if (stepUrl) {
+        return (
+          <div className={`relative flex ${workspacePreviewHeightClass} items-center justify-center overflow-hidden rounded-lg bg-white p-4`}>
+            <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-6 text-center shadow-sm">
+              <FileStack className="mx-auto h-12 w-12 text-emerald-500" />
+              <div className="mt-4 text-lg font-extrabold text-slate-900">STEP 图已生成</div>
+              <div className="mt-2 text-sm leading-6 text-slate-500">
+                STEP 数模已导出，可下载用于代工与后续制造。
+              </div>
+              <a
+                href={stepUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700"
+              >
+                <Download className="h-4 w-4" />
+                下载 STEP 文件
+              </a>
+            </div>
+          </div>
+        );
+      }
     }
     if (previewVersionImageUrl && activeScenario !== 'production') {
       return (
@@ -1996,6 +2258,63 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
           </div>
         </header>
 
+        <div className="border-b border-slate-200/80 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-3">
+          <div className="flex items-stretch gap-1.5 overflow-x-auto pb-1">
+            {workspaceSteps.map((step, index) => {
+              const stepState = stepStates[step.id];
+              const isActive = activeStepId === step.id;
+              const isCompleted = stepState.status === 'completed';
+              const isRunning = stepState.status === 'running';
+              const isFailed = stepState.status === 'failed';
+              const prevStep = index > 0 ? workspaceSteps[index - 1] : null;
+              const isNewGroup = prevStep ? prevStep.scenario !== step.scenario : false;
+              return (
+                <React.Fragment key={step.id}>
+                  {isNewGroup ? (
+                    <span className="mx-1 my-auto h-8 w-px shrink-0 bg-slate-200" />
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => handleStepClick(step)}
+                    disabled={isRunning || isSubmittingCadAiWorkflow}
+                    className={`group flex min-w-[104px] flex-1 flex-col items-center gap-1.5 rounded-2xl border px-2.5 py-2.5 text-center transition ${
+                      isActive
+                        ? `border-transparent bg-gradient-to-r ${step.toneClass} text-white shadow-[0_10px_24px_rgba(15,23,42,0.12)]`
+                        : 'border-slate-200/80 bg-white/70 text-slate-600 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-white hover:shadow-sm'
+                    } disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:translate-y-0`}
+                  >
+                    <span className="relative flex h-7 w-7 items-center justify-center">
+                      {isRunning ? (
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full bg-white/30 ${isActive ? '' : 'bg-blue-50'}`}>
+                          <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        </span>
+                      ) : isCompleted ? (
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full ${isActive ? 'bg-white/30' : 'bg-emerald-50'}`}>
+                          <Activity className={`h-3 w-3 ${isActive ? 'text-white' : 'text-emerald-600'}`} />
+                        </span>
+                      ) : isFailed ? (
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full ${isActive ? 'bg-white/30' : 'bg-rose-50'}`}>
+                          <X className={`h-3 w-3 ${isActive ? 'text-white' : 'text-rose-600'}`} />
+                        </span>
+                      ) : (
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full ${isActive ? 'bg-white/25' : 'bg-slate-100'}`}>
+                          <span className={`text-[10px] font-bold ${isActive ? 'text-white' : 'text-slate-400'}`}>{index + 1}</span>
+                        </span>
+                      )}
+                    </span>
+                    <span className={`text-[11px] font-bold leading-tight ${isActive ? 'text-white' : 'text-slate-700'}`}>
+                      {step.shortLabel}
+                    </span>
+                    <span className={`hidden text-[9px] leading-tight sm:block ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
+                      {step.description}
+                    </span>
+                  </button>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+
         {workspaceLoadError ? (
           <div className="mx-5 mt-4 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             <span>工作区资产加载失败：{workspaceLoadError}</span>
@@ -2297,33 +2616,43 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
               </div>
 
               <div>
-                <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">场景</div>
+                <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">场景分组</div>
                 <div className="mt-2 space-y-2">
-                  {scenarioTabs.map((scenario) => {
-                    const isActive = activeScenario === scenario.id;
+                  {(['design', 'propaganda', 'production'] as CoCreationScenario[]).map((scenarioId) => {
+                    const config = scenarioConfigs[scenarioId];
+                    const scenarioSteps = workspaceSteps.filter((step) => step.scenario === scenarioId);
+                    const scenarioStepIds = scenarioSteps.map((step) => step.id);
+                    const scenarioCompleted = scenarioSteps.filter((step) => stepStates[step.id]?.status === 'completed').length;
+                    const isActive = activeStepId ? scenarioSteps.some((step) => step.id === activeStepId) : activeScenario === scenarioId;
                     return (
-                      <button
-                        key={scenario.id}
-                        type="button"
-                        onClick={() => {
-                          void persistWorkspaceAndApply(
-                            { activeScenario: scenario.id, activeStepIndex: 0 },
-                            () => {
-                              setActiveScenario(scenario.id);
-                              setActiveStepIndex(0);
-                            },
-                          );
-                        }}
-                        className={`flex w-full items-start justify-between rounded-2xl px-3.5 py-3.5 text-left transition ${
-                          isActive ? 'bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 ring-1 ring-blue-100' : 'text-slate-600 hover:bg-slate-50'
+                      <div
+                        key={scenarioId}
+                        className={`rounded-2xl border px-3.5 py-3 transition ${
+                          isActive ? 'border-blue-100 bg-gradient-to-r from-blue-50 to-indigo-50 ring-1 ring-blue-100' : 'border-slate-200/80 bg-white/70'
                         }`}
                       >
-                        <span>
-                          <span className="block text-sm font-extrabold">{scenario.label}</span>
-                          <span className="mt-1 block text-xs leading-5 text-slate-500">{scenario.description}</span>
-                        </span>
-                        <Square className={`mt-1 h-2.5 w-2.5 ${isActive ? 'fill-blue-600 text-blue-600' : 'text-slate-300'}`} />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const firstStepId = scenarioStepIds[0] || 'reference';
+                            setActiveStepId(firstStepId);
+                            setActiveScenario(scenarioId);
+                            setActiveStepIndex(0);
+                            setActiveWorkflowStage(scenarioId);
+                          }}
+                          className="flex w-full items-start justify-between text-left"
+                        >
+                          <span>
+                            <span className="block text-sm font-extrabold text-slate-800">{config.label}</span>
+                            <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                              {scenarioSteps.map((step) => step.shortLabel).join(' · ')}
+                            </span>
+                          </span>
+                          <span className="mt-0.5 text-[10px] font-semibold text-slate-400">
+                            {scenarioCompleted}/{scenarioSteps.length}
+                          </span>
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -2340,11 +2669,11 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
                 </button>
                 <button
                   type="button"
-                  onClick={() => void submitIndustrialDesignWorkflow('toolbar', activeScenario)}
+              onClick={() => handleActiveStepGenerate()}
                   disabled={isSubmittingForgeCad || isSubmittingCadAiWorkflow}
                   className="rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-bold text-white shadow-[0_12px_28px_rgba(37,99,235,0.24)] transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-[0_16px_34px_rgba(37,99,235,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
                 >
-                  {isSubmittingForgeCad || isSubmittingCadAiWorkflow ? '生成中...' : '生成方案'}
+                  {isSubmittingForgeCad || isSubmittingCadAiWorkflow ? '生成中...' : currentSubmitActionLabel}
                 </button>
               </div>
 
@@ -2386,6 +2715,7 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
                               setSelectedPreviewVersion(version);
                               setActiveScenario('design');
                               setActiveStepIndex(2);
+                              setActiveStepId('designImage');
                               setViewMode('preview3d');
                               setWorkflowNotice(version.resultText || version.executionSummary || version.note || '已切换到历史版本预览');
                             },
