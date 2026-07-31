@@ -375,6 +375,18 @@ class DesignReviewService:
         ) or "规则检查未发现明显问题。"
 
         review_text = ""
+        knowledge_context = ""
+        try:
+            from app.services.knowledge_base_service import knowledge_base_service
+
+            context = knowledge_base_service.build_context(str(requirement or project_name), top_k=3)
+            if context:
+                knowledge_context = (
+                    "\n\n【工业知识库参考（来自产业共享平台，辅助审查判断）】\n"
+                    f"{context}"
+                )
+        except Exception:
+            logger.debug("知识库检索不可用，跳过注入", exc_info=True)
         try:
             review_text = await self._request_llm([
                 {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
@@ -385,7 +397,8 @@ class DesignReviewService:
                         f"几何分析数据：\n"
                         f"外形尺寸 {analysis.get('sizeMm')} mm；体积 {analysis.get('volumeMm3')} mm³；"
                         f"最小边 {analysis.get('minEdgeMm')} mm；孔径 {analysis.get('holeRadiiMm')} mm。\n"
-                        f"规则检查结果：\n{finding_text}\n\n"
+                        f"规则检查结果：\n{finding_text}\n"
+                        f"{knowledge_context}\n\n"
                         f"请给出设计审查报告。"
                     ),
                 },

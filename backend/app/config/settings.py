@@ -117,6 +117,17 @@ class Settings(BaseSettings):
     JSON_REQUEST_MAX_BYTES: int = Field(default=2 * 1024 * 1024, gt=0)
     FORGECAD_IMPORT_MAX_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
     CAD_PROVIDER: str = ""
+
+    # 知识库（Milvus + V8 数据同步）
+    KNOWLEDGE_MILVUS_URI: str = "http://milvus:19530"
+    KNOWLEDGE_COLLECTION: str = "cocreation_knowledge"
+    KNOWLEDGE_EMBEDDING_MODEL: str = "text-embedding-v4"
+    KNOWLEDGE_EMBEDDING_DIM: int = 1024
+    VECTOR_DB_EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    KNOWLEDGE_SYNC_SOURCE_URL: Optional[str] = None   # V8 MySQL 地址（如 cygxpt-mysql:3306）
+    KNOWLEDGE_SYNC_SOURCE_DB: str = "cygxszpt"
+    KNOWLEDGE_SYNC_SOURCE_USER: str = "root"
+    KNOWLEDGE_SYNC_SOURCE_PASSWORD: Optional[str] = None
     ENABLE_TRUSTED_MEDIA_PIPELINE: bool = False
 
     # 会话配置

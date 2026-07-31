@@ -332,7 +332,19 @@ class Build123dService:
         return code
 
     def _build_user_prompt(self, design_prompt: str) -> str:
-        return f"生成以下设计的 build123d 代码：\n{design_prompt}"
+        knowledge_context = ""
+        try:
+            from app.services.knowledge_base_service import knowledge_base_service
+
+            context = knowledge_base_service.build_context(design_prompt, top_k=3)
+            if context:
+                knowledge_context = (
+                    "\n\n【工业知识库参考（来自产业共享平台，用于辅助建模判断，仅作参考）】\n"
+                    f"{context}"
+                )
+        except Exception:
+            logger.debug("知识库检索不可用，跳过注入", exc_info=True)
+        return f"生成以下设计的 build123d 代码：\n{design_prompt}{knowledge_context}"
 
     def _run_script(
         self,

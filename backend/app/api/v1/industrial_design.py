@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_auth
+from app.config.settings import settings
 from app.core.identity import auth_user_id
 from app.db.session import get_db
 from app.schemas.industrial_design import IndustrialDesignWorkflowRequest
@@ -18,6 +19,7 @@ from app.services.engineering_package_service import (
     EngineeringPackageServiceError,
     engineering_package_service,
 )
+from app.services.knowledge_base_service import knowledge_base_service
 from app.services.industrial_design_workflow_service import industrial_design_workflow_service
 from app.utils.response import error_response, success_response
 
@@ -117,6 +119,60 @@ async def get_industrial_design_workflow(
                 code=exc.status_code,
                 error_code=exc.error_code,
             ),
+        )
+
+
+@router.get("/knowledge/health", response_model=dict, summary="知识库健康检查")
+def check_knowledge_base_health() -> dict[str, object] | JSONResponse:
+    try:
+        return success_response(data=knowledge_base_service.health(), message="知识库状态已返回")
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(message=str(exc), code=500, error_code="KNOWLEDGE_HEALTH_FAILED"),
+        )
+
+
+@router.get("/knowledge/search", response_model=dict, summary="知识库语义检索")
+def search_knowledge_base(
+    q: str,
+    top_k: int = 5,
+) -> dict[str, object] | JSONResponse:
+    try:
+        citations = knowledge_base_service.search(q, top_k=top_k)
+        return success_response(data={"citations": citations, "count": len(citations)}, message="知识库检索完成")
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(message=str(exc), code=500, error_code="KNOWLEDGE_SEARCH_FAILED"),
+        )
+
+
+@router.post("/knowledge/sync", response_model=dict, summary="从产业共享平台同步知识库")
+def sync_knowledge_base() -> dict[str, object] | JSONResponse:
+    """从 V8 产业共享平台 MySQL 同步知识切片并向量化入库（需配置 KNOWLEDGE_SYNC_*）。"""
+    source_url = settings.KNOWLEDGE_SYNC_SOURCE_URL
+    if not source_url or not settings.KNOWLEDGE_SYNC_SOURCE_PASSWORD:
+        return JSONResponse(
+            status_code=503,
+            content=error_response(
+                message="未配置 KNOWLEDGE_SYNC_SOURCE_URL / KNOWLEDGE_SYNC_SOURCE_PASSWORD",
+                code=503,
+                error_code="KNOWLEDGE_SYNC_NOT_CONFIGURED",
+            ),
+        )
+    try:
+        result = knowledge_base_service.sync_from_v8(
+            source_url=source_url,
+            db_name=settings.KNOWLEDGE_SYNC_SOURCE_DB,
+            user=settings.KNOWLEDGE_SYNC_SOURCE_USER,
+            password=settings.KNOWLEDGE_SYNC_SOURCE_PASSWORD,
+        )
+        return success_response(data=result, message="知识库同步完成")
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(message=str(exc), code=500, error_code="KNOWLEDGE_SYNC_FAILED"),
         )
 
 

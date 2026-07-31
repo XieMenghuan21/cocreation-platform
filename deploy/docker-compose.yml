@@ -55,6 +55,11 @@ services:
       NODAPI_API_KEY: ${NODAPI_API_KEY:-}
       CAD_AI_BASE_URL: ${CAD_AI_BASE_URL:-}
       CAD_AI_API_KEY: ${CAD_AI_API_KEY:-}
+      KNOWLEDGE_MILVUS_URI: ${KNOWLEDGE_MILVUS_URI:-http://milvus:19530}
+      KNOWLEDGE_SYNC_SOURCE_URL: ${KNOWLEDGE_SYNC_SOURCE_URL:-}
+      KNOWLEDGE_SYNC_SOURCE_DB: ${KNOWLEDGE_SYNC_SOURCE_DB:-cygxszpt}
+      KNOWLEDGE_SYNC_SOURCE_USER: ${KNOWLEDGE_SYNC_SOURCE_USER:-root}
+      KNOWLEDGE_SYNC_SOURCE_PASSWORD: ${KNOWLEDGE_SYNC_SOURCE_PASSWORD:-}
     volumes:
       - uploads-data:/app/uploads
       - ../backend/app/core/middleware.py:/app/app/core/middleware.py
