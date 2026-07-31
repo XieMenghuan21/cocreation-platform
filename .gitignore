@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 构建产物
+dist/
+build/
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# 运行时数据
+backend/cocreation.db
+backend/storage/
+backend/uploads/
+
+# 系统
+.DS_Store
+.playwright-cli/

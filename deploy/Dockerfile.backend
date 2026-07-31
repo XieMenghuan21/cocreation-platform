@@ -1,0 +1,28 @@
+FROM --platform=linux/arm64 python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc procps curl && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY backend/ .
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir . Pillow pypdf && \
+    rm -rf /root/.cache/pip
+
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+RUN mkdir -p /app/uploads /app/storage
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ping')" || exit 1
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

@@ -1,0 +1,81 @@
+version: "2.4"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cocreation-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cocreation
+      POSTGRES_DB: cocreation
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cocreation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: cocreation-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://cocreation:${POSTGRES_PASSWORD:-changeme}@postgres:5432/cocreation
+      ALLOWED_ORIGINS_STR: http://106.8.105.18:44308,http://localhost:5174,http://localhost:5173,http://localhost:8001
+      FRONTEND_URL: http://106.8.105.18:44308
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      DEBUG: "false"
+      ENVIRONMENT: development
+      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SAMESITE: lax
+      UPLOAD_PATH: /app/uploads
+      ENABLE_LOCAL_TEST_USERS: "true"
+      ENABLE_TRUSTED_MEDIA_PIPELINE: "true"
+      MAIN_PLATFORM_URL: http://106.8.105.18:44303
+      SESSION_COOKIE_SECURE: "false"
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      LOCAL_QWEN_BASE_URL: ${LOCAL_QWEN_BASE_URL:-http://127.0.0.1:58080/v1}
+      LOCAL_QWEN_API_KEY: ${LOCAL_QWEN_API_KEY:-local-qwen}
+      LOCAL_QWEN_MODEL: ${LOCAL_QWEN_MODEL:-/data/models/Qwen3-32B-INT8}
+      NODAPI_API_KEY: ${NODAPI_API_KEY:-}
+      CAD_AI_BASE_URL: ${CAD_AI_BASE_URL:-}
+      CAD_AI_API_KEY: ${CAD_AI_API_KEY:-}
+    volumes:
+      - uploads-data:/app/uploads
+      - ../backend/app/core/middleware.py:/app/app/core/middleware.py
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    container_name: cocreation-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "44308:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres-data:
+  uploads-data:
