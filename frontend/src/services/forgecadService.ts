@@ -335,6 +335,41 @@ export const getCadAiTask = async (taskId: string): Promise<CadAiTaskStatus> => 
   return response.data;
 };
 
+export interface EngineeringPackageResult {
+  taskId: string;
+  status: string;
+  packageAssetId?: string;
+  packageDownloadUrl?: string;
+  filename?: string;
+}
+
+export const createEngineeringPackage = async (taskId: string): Promise<EngineeringPackageResult> => {
+  const response = await httpRequest.post<EngineeringPackageResult>(
+    `/api/v1/industrial-design/workflows/${taskId}/engineering-package`,
+    {},
+    { timeout: 180000 },
+  );
+  return response.data;
+};
+
+export interface DesignReviewResult {
+  taskId: string;
+  status: string;
+  reviewAssetId?: string;
+  reviewDownloadUrl?: string;
+  analysis?: Record<string, unknown>;
+  reviewText?: string;
+}
+
+export const createDesignReview = async (taskId: string): Promise<DesignReviewResult> => {
+  const response = await httpRequest.post<DesignReviewResult>(
+    `/api/v1/industrial-design/workflows/${taskId}/design-review`,
+    {},
+    { timeout: 180000 },
+  );
+  return response.data;
+};
+
 export const getCadAiAssetDownloadUrl = (assetId: string): string => {
   return `${API_BASE}/assets/${assetId}/download`;
 };

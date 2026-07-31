@@ -32,6 +32,8 @@ import {
   generateForgeCadModel,
   generateWithDrawing,
   uploadForgeCadImportAsset,
+  createEngineeringPackage,
+  createDesignReview,
   type CadAiTaskStatus,
   type ForgeCadExplosionStep,
   type ForgeCadGeneratedAsset,
@@ -39,6 +41,7 @@ import {
   type ForgeCadImportAsset,
   type ForgeCadVersionSnapshot,
   type IndustrialDesignInputType,
+  type DesignReviewResult,
 } from '../services/forgecadService';
 import { aggregationWorkbenchService } from '../services/aggregationWorkbenchService';
 import { cocreationHistoryService } from '../services/cocreationHistoryService';
@@ -261,6 +264,9 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
   const [stepStates, setStepStates] = useState<Record<WorkspaceStepId, StepState>>(
     () => deriveStepStatesFromOutputs(null),
   );
+  const [isPackaging, setIsPackaging] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [designReview, setDesignReview] = useState<DesignReviewResult | null>(null);
   const [isSubmittingForgeCad, setIsSubmittingForgeCad] = useState(false);
   const [versionSnapshots, setVersionSnapshots] = useState<VersionSnapshot[]>([]);
   const [, setWorkspaceState] = useState<WorkspaceState | null>(null);
@@ -1745,6 +1751,48 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
     void submitIndustrialDesignWorkflow('step', getScenarioFromStep(stepMeta.id), stepMeta.id);
   };
 
+  const handleExportEngineeringPackage = async (): Promise<void> => {
+    const taskId = cadAiWorkflow?.taskId;
+    if (!taskId || isPackaging) return;
+    setIsPackaging(true);
+    setSubmitFeedback({ title: '正在生成工程设计包', detail: '正在打包设计说明、图纸、3D 数模与 BOM...' });
+    try {
+      const result = await createEngineeringPackage(taskId);
+      if (result.packageDownloadUrl) {
+        setSubmitFeedback({
+          title: '工程设计包已生成',
+          detail: '已打包为可交付的工程包，点击下方按钮下载。',
+        });
+        window.open(result.packageDownloadUrl, '_blank');
+      } else {
+        setSubmitFeedback({ title: '工程设计包生成失败', detail: result.status || '请稍后重试。' });
+      }
+    } catch (error) {
+      setSubmitFeedback({ title: '工程设计包生成失败', detail: resolveIndustrialDesignSubmitError(error) });
+    } finally {
+      setIsPackaging(false);
+    }
+  };
+
+  const handleCreateDesignReview = async (): Promise<void> => {
+    const taskId = cadAiWorkflow?.taskId;
+    if (!taskId || isReviewing) return;
+    setIsReviewing(true);
+    setSubmitFeedback({ title: '正在执行设计审查', detail: '正在执行几何规则检查并生成审查报告...' });
+    try {
+      const result = await createDesignReview(taskId);
+      setDesignReview(result);
+      setSubmitFeedback({
+        title: '设计审查完成',
+        detail: '审查报告已生成，可在下方查看。',
+      });
+    } catch (error) {
+      setSubmitFeedback({ title: '设计审查失败', detail: resolveIndustrialDesignSubmitError(error) });
+    } finally {
+      setIsReviewing(false);
+    }
+  };
+
   const handleStepClick = (step: WorkspaceStepMeta): void => {
     const stepState = stepStates[step.id];
     const scenarioStepIndex = workspaceSteps
@@ -1918,7 +1966,43 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
                   下载 STEP
                 </a>
               ) : null}
+              <button
+                type="button"
+                onClick={() => void handleExportEngineeringPackage()}
+                disabled={isPackaging}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isPackaging ? '打包中...' : '导出工程包'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCreateDesignReview()}
+                disabled={isReviewing}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isReviewing ? '审查中...' : '设计审查'}
+              </button>
             </div>
+            {designReview?.reviewText ? (
+              <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-700">设计审查报告</span>
+                  {designReview.reviewDownloadUrl ? (
+                    <a
+                      href={designReview.reviewDownloadUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-semibold text-indigo-600 transition hover:text-indigo-800"
+                    >
+                      下载 PDF
+                    </a>
+                  ) : null}
+                </div>
+                <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">
+                  {designReview.reviewText}
+                </div>
+              </div>
+            ) : null}
           </div>
         );
       }
@@ -1947,6 +2031,15 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
                 <Download className="h-4 w-4" />
                 下载 STEP 文件
               </a>
+              <button
+                type="button"
+                onClick={() => void handleExportEngineeringPackage()}
+                disabled={isPackaging}
+                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download className="h-4 w-4" />
+                {isPackaging ? '打包中...' : '导出工程设计包'}
+              </button>
             </div>
           </div>
         );
