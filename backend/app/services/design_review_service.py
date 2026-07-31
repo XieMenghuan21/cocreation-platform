@@ -93,7 +93,33 @@ class DesignReviewService:
             return None
 
     def _read_asset(self, db: Session, user_id: str, asset_id: str) -> bytes:
-        return self.asset_service.read_bytes(db, UUID(asset_id), user_id)
+        from sqlalchemy import select
+
+        from app.models.persistence import AssetBlobChunk
+
+        asset = self.asset_service._get_owned_asset(
+            db,
+            UUID(asset_id),
+            user_id,
+            require_available=False,
+        )
+        chunks = list(
+            db.scalars(
+                select(AssetBlobChunk)
+                .where(AssetBlobChunk.asset_id == asset.id)
+                .order_by(AssetBlobChunk.chunk_index)
+            )
+        )
+        if len(chunks) != asset.chunk_count:
+            raise DesignReviewServiceError(
+                f"资产数据不完整：{asset_id}",
+                "REVIEW_ASSET_INCOMPLETE",
+                status_code=502,
+            )
+        content = bytearray()
+        for chunk in chunks:
+            content.extend(chunk.content)
+        return bytes(content)
 
     def _analyze_step(self, step_bytes: bytes) -> dict[str, object]:
         try:
@@ -327,42 +353,58 @@ class DesignReviewService:
         *,
         db: Session,
         user_id: str,
-        task_id: str,
+        task_id: str | None = None,
+        step_asset_id: str | None = None,
+        project_name: str | None = None,
+        requirement: str | None = None,
         publish_assets: bool = True,
     ) -> dict[str, JsonValue]:
-        """对任务 3D 模型生成设计审查报告并入库。"""
+        """对 3D 模型生成设计审查报告并入库。
+
+        提供 task_id 时从任务 outputs 读取 STEP；否则需直接传 step_asset_id。
+        """
         if not self.available:
             raise DesignReviewServiceError(
                 "build123d 未安装，无法执行设计审查",
                 "REVIEW_IMPORT_UNAVAILABLE",
                 status_code=503,
             )
-        task = self.repository_factory(db).get_internal(task_id)
-        if task is None:
+        if task_id:
+            task = self.repository_factory(db).get_internal(task_id)
+            if task is None:
+                raise DesignReviewServiceError(
+                    "工业品设计任务不存在",
+                    "REVIEW_TASK_NOT_FOUND",
+                    status_code=404,
+                )
+            outputs = task.get("outputs") or {}
+            if not isinstance(outputs, Mapping):
+                raise DesignReviewServiceError(
+                    "任务产物数据异常",
+                    "REVIEW_OUTPUTS_INVALID",
+                    status_code=500,
+                )
+            step_asset_id = self._extract_asset_id(outputs.get("modelStepAssetId"))
+            if step_asset_id is None:
+                raise DesignReviewServiceError(
+                    "该任务尚未产出 STEP 模型，无法审查",
+                    "REVIEW_NO_MODEL",
+                    status_code=400,
+                )
+            project_name = str(task.get("projectId") or "未命名项目")
+            design_spec = task.get("designSpec")
+            if not isinstance(design_spec, Mapping):
+                design_spec = {}
+            requirement = design_spec.get("requirementText") or (task.get("inputPayload") or {}).get("text") or ""
+        if not step_asset_id:
             raise DesignReviewServiceError(
-                "工业品设计任务不存在",
-                "REVIEW_TASK_NOT_FOUND",
-                status_code=404,
-            )
-        outputs = task.get("outputs") or {}
-        if not isinstance(outputs, Mapping):
-            raise DesignReviewServiceError(
-                "任务产物数据异常",
-                "REVIEW_OUTPUTS_INVALID",
-                status_code=500,
-            )
-        step_asset_id = self._extract_asset_id(outputs.get("modelStepAssetId"))
-        if step_asset_id is None:
-            raise DesignReviewServiceError(
-                "该任务尚未产出 STEP 模型，无法审查",
+                "缺少可审查的 STEP 模型",
                 "REVIEW_NO_MODEL",
                 status_code=400,
             )
-        project_name = str(task.get("projectId") or "未命名项目")
-        design_spec = task.get("designSpec")
-        if not isinstance(design_spec, Mapping):
-            design_spec = {}
-        requirement = design_spec.get("requirementText") or (task.get("inputPayload") or {}).get("text") or ""
+        project_name = str(project_name or "未命名项目")
+        requirement = str(requirement or "")
+        design_spec: Mapping[str, object] = {"requirementText": requirement} if requirement else {}
 
         step_bytes = self._read_asset(db, user_id, step_asset_id)
         analysis = self._analyze_step(step_bytes)

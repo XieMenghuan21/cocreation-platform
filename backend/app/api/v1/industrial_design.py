@@ -11,6 +11,10 @@ from app.core.identity import auth_user_id
 from app.db.session import get_db
 from app.schemas.industrial_design import IndustrialDesignWorkflowRequest
 from app.services.cad_ai_gateway_service import CadAiGatewayError
+from app.services.agent_orchestrator import (
+    AgentOrchestratorError,
+    agent_orchestrator,
+)
 from app.services.design_review_service import (
     DesignReviewServiceError,
     design_review_service,
@@ -112,6 +116,33 @@ async def get_industrial_design_workflow(
         result = await industrial_design_workflow_service.get_workflow(task_id, auth_user=auth_user)
         return success_response(data=result, message="工业品设计工作流状态已返回")
     except CadAiGatewayError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_response(
+                message=exc.message,
+                code=exc.status_code,
+                error_code=exc.error_code,
+            ),
+        )
+
+
+@router.post("/agent/industrial-design", response_model=dict, summary="工业设计总师 Agent 编排")
+async def run_agent_orchestrator(
+    request: IndustrialDesignWorkflowRequest,
+    db: Session = Depends(get_db),
+    auth_user: dict[str, object] = Depends(require_auth),
+) -> dict[str, object] | JSONResponse:
+    """LangGraph 总师编排：需求理解 → build123d CAD → 设计审查（保留 workflow 服务为 fallback）。"""
+    user_id = auth_user_id(auth_user)
+    try:
+        result = await agent_orchestrator.orchestrate(
+            request=request.model_dump(by_alias=True),
+            db=db,
+            user_id=user_id,
+        )
+        db.commit()
+        return success_response(data=result, message="工业设计总师 Agent 编排完成")
+    except AgentOrchestratorError as exc:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_response(
