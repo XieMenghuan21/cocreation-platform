@@ -36,9 +36,11 @@ BUILD123D_SYSTEM_PROMPT = """你是资深机械设计 CAD 建模专家，使用 
    - 拉伸：extrude(face_or_sketch, amount)
    - 定位：Pos(x, y, z) * obj、Rot(axis, angle) * obj、Plane 组合
    - 布尔运算：part += obj / part -= obj / part *= obj
-   - 圆角倒角：fillet(edges, radius)、chamfer(edges, length)
+   - 圆角倒角：除非产品确实需要，否则默认不要使用 fillet()/chamfer()；必须用时，radius 要小于相邻边长一半，且先确认所选边存在（用 obj.edges().filter_by(...) 精确选少量边，禁止对孔洞/圆孔边缘使用，禁止用边号/索引猜测边）
    - 挖孔：用 Cylinder + part -=，孔穿通时高度要足够
-   - 选择器只允许这两种写法：obj.edges().filter_by(lambda e: e.length == 20) 或 obj.faces().sort_by(Axis.X)[-1]，禁止使用 Length 之类的单词作过滤器
+   - 2D 面对象（Circle、Rectangle、Sketch）没有 outer_wire()/edges()/vertices() 等方法；取 3D 实体的边统一用 obj.edges().filter_by(...)，不要对某个面再取 outer_wire
+   - 选择器只允许这两种写法：obj.edges().filter_by(lambda e: e.length == 20) 或 obj.faces().sort_by(Axis.X)[-1]，禁止使用 Length 之类的单词作过滤器；除这两种之外的选择器 API（filter_by_position、filter_by_radius、sort_by_distance、vertices()、wires()、outer_wire() 等）一律禁止使用，否则代码必然报错
+   - 一个子对象被 part += 合并进主对象后，禁止再对那个子对象调用任何方法（其边/面已不属于主对象）；需要圆角时只对最终主对象（如 part/result）的边做 fillet，且 radius 取较小值（如 0.5-2）
    - 需要三角函数等数学函数时，在代码开头加：from math import *
 4. 绝对禁止：对象名 .translate(...) 和 .rotate(...) 方法（build123d 不支持这种调用方式），一律用 Pos(...) * obj 或 Rot(...) * obj 实现平移旋转；不要在空对象上做 += 操作，先用 Box/Cylinder 创建初始对象再加减。
 5. 所有尺寸单位为毫米，模型要结构合理、可制造。
@@ -393,11 +395,16 @@ class Build123dService:
             if ok:
                 return code, messages
             last_error = error_output
+            retry_guidance = ""
+            if re.search(r"fillet|chamfer|Nothing to (fillet|chamfer)", error_output, re.IGNORECASE):
+                retry_guidance = (
+                    "\n特别注意：如果错误来自 fillet 或 chamfer，直接删除代码中所有 fillet() 和 chamfer() 调用（圆角是可选优化，不要因此牺牲模型可用性），保持其余几何不变。"
+                )
             messages.append({"role": "assistant", "content": raw})
             messages.append({
                 "role": "user",
                 "content": (
-                    f"脚本执行报错，请修复后重新输出完整代码。错误信息：\n{error_output[:3000]}"
+                    f"脚本执行报错，请修复后重新输出完整代码。错误信息：\n{error_output[:3000]}\n{retry_guidance}"
                 ),
             })
         raise Build123dServiceError(

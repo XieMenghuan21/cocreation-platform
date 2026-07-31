@@ -2167,6 +2167,18 @@ class IndustrialDesignWorkflowService:
             if key.endswith("AssetId")
             if (parsed_id := cls._parse_asset_uuid(value)) is not None
         }
+        for item in (outputs.get("renderViews") or []):
+            if not isinstance(item, dict):
+                continue
+            nested_id = cls._parse_asset_uuid(item.get("assetId"))
+            if nested_id is not None:
+                referenced_ids.add(nested_id)
+        logger.info(
+            "finalize staged assets: workflow=%s publish=%s referenced=%d",
+            workflow_id,
+            publish,
+            len(referenced_ids),
+        )
         if not referenced_ids:
             return
         task = repository.get_internal(workflow_id)
