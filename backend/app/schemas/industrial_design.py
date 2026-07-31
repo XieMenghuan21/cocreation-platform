@@ -32,6 +32,9 @@ class IndustrialDesignWorkflowOptions(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     generate_cad: bool = Field(default=True, alias="generateCad")
+    generate_plan_line: bool = Field(default=False, alias="generatePlanLine")
+    generate_render_views: bool = Field(default=False, alias="generateRenderViews")
+    cad_provider: str | None = Field(default=None, alias="cadProvider")
     generate_drawing: bool = Field(default=True, alias="generateDrawing")
     generate_three_preview: bool = Field(default=True, alias="generateThreePreview")
     generate_render: bool = Field(default=True, alias="generateRender")

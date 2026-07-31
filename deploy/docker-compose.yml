@@ -44,6 +44,11 @@ services:
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      CAD_PROVIDER: ${CAD_PROVIDER:-build123d}
+      BUILD123D_LLM_BASE_URL: ${BUILD123D_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      BUILD123D_LLM_API_KEY: ${BUILD123D_LLM_API_KEY:-}
+      BUILD123D_LLM_MODEL: ${BUILD123D_LLM_MODEL:-qwen-plus}
       LOCAL_QWEN_BASE_URL: ${LOCAL_QWEN_BASE_URL:-http://127.0.0.1:58080/v1}
       LOCAL_QWEN_API_KEY: ${LOCAL_QWEN_API_KEY:-local-qwen}
       LOCAL_QWEN_MODEL: ${LOCAL_QWEN_MODEL:-/data/models/Qwen3-32B-INT8}

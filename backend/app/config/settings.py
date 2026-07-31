@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     ASSET_METADATA_MAX_BYTES: int = Field(default=64 * 1024, gt=0)
     JSON_REQUEST_MAX_BYTES: int = Field(default=2 * 1024 * 1024, gt=0)
     FORGECAD_IMPORT_MAX_BYTES: int = Field(default=50 * 1024 * 1024, gt=0)
+    CAD_PROVIDER: str = ""
     ENABLE_TRUSTED_MEDIA_PIPELINE: bool = False
 
     # 会话配置

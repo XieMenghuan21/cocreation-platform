@@ -39,6 +39,10 @@ from app.services.asset_blob_service import AssetBlobService
 from app.services.cocreation_history_service import cocreation_history_service
 from app.services.dashscope_image_service import DashScopeImageServiceError
 from app.services.cad_ai_gateway_service import CadAiGatewayError, cad_ai_gateway_service
+from app.services.cad_build123d_service import (
+    Build123dServiceError,
+    build123d_service,
+)
 from app.services.forgecad_service import ForgeCadServiceError, forgecad_service
 from app.services.furniture_drawing_service import furniture_drawing_service
 from app.services.image2_edit_service import Image2EditServiceError, image2_edit_service
@@ -71,6 +75,7 @@ class IndustrialDesignWorkflowService:
         forgecad_service=forgecad_service,
         drawing_service=furniture_drawing_service,
         ai_model_gateway=ai_model_gateway_service,
+        build123d_service=build123d_service,
         zoo_design_service=zoo_design_service,
         image2_edit_service=image2_edit_service,
         nodapi_midjourney_service=nodapi_midjourney_service,
@@ -88,6 +93,7 @@ class IndustrialDesignWorkflowService:
         self.forgecad_service = forgecad_service
         self.drawing_service = drawing_service
         self.ai_model_gateway = ai_model_gateway
+        self.build123d_service = build123d_service
         self.zoo_design_service = zoo_design_service
         self.image2_edit_service = image2_edit_service
         self.nodapi_midjourney_service = nodapi_midjourney_service
@@ -302,9 +308,22 @@ class IndustrialDesignWorkflowService:
     def _remote_gateway_configured(self) -> bool:
         return bool(str(getattr(self.cad_ai_gateway, "base_url", "") or "").strip())
 
+    def _cad_provider(self, request: IndustrialDesignWorkflowRequest) -> str:
+        requested = (request.options.cad_provider or "").strip().lower()
+        if requested in {"build123d", "forgecad"}:
+            return requested
+        env_provider = str(getattr(settings, "CAD_PROVIDER", "") or "").strip().lower()
+        if env_provider in {"build123d", "forgecad"}:
+            return env_provider
+        if not self.forgecad_service.bridge_base_url and self.build123d_service.available:
+            return "build123d"
+        return "forgecad"
+
     def _external_chain_configured(self, request: IndustrialDesignWorkflowRequest) -> bool:
-        if request.options.generate_cad or request.options.generate_three_preview:
+        if request.options.generate_cad or request.options.generate_three_preview or request.options.generate_plan_line:
             return True
+        if request.options.generate_render_views:
+            return self.build123d_service.available
         if request.options.generate_drawing and self.ai_model_gateway.image_configured():
             return True
         if request.options.generate_render and self.ai_model_gateway.image_configured():
@@ -402,50 +421,133 @@ class IndustrialDesignWorkflowService:
                 })
 
         if request.options.generate_cad:
+            if self._cad_provider(request) == "build123d":
+                try:
+                    build123d_result = await self.build123d_service.generate_model(
+                        prompt=self._build_build123d_prompt(project_name, request, design_spec),
+                        db=db,
+                        user_id=user_id,
+                        task_id=workflow_id,
+                        publish_assets=False,
+                        render_views=request.options.generate_render_views,
+                    )
+                    outputs.update({
+                        "modelScriptAssetId": build123d_result.get("modelScriptAssetId"),
+                        "modelScript": (
+                            self._asset_url(str(build123d_result["modelScriptAssetId"]))
+                            if build123d_result.get("modelScriptAssetId")
+                            else None
+                        ),
+                        "modelStepAssetId": build123d_result.get("modelStepAssetId"),
+                        "modelStep": build123d_result.get("modelStep"),
+                        "modelStlAssetId": build123d_result.get("modelStlAssetId"),
+                        "modelStl": build123d_result.get("modelStl"),
+                        "modelGlbAssetId": build123d_result.get("modelGlbAssetId"),
+                        "modelGlb": build123d_result.get("modelGlb"),
+                        "modelDownloadUrl": build123d_result.get("modelDownloadUrl"),
+                        "build123dTaskId": build123d_result.get("taskId"),
+                    })
+                    if build123d_result.get("renderViews"):
+                        outputs["renderViews"] = build123d_result["renderViews"]
+                        outputs["renderViewsPreview"] = build123d_result.get("renderViewsPreview")
+                except Build123dServiceError as exc:
+                    logger.warning(
+                        "本地 build123d 生成失败，error_code=%s",
+                        exc.error_code,
+                        exc_info=True,
+                    )
+                    diagnostics.append({
+                        "level": "warning",
+                        "title": "3D 模型生成失败",
+                        "detail": "3D 模型生成失败，请检查服务配置后重试。",
+                    })
+                except Exception as exc:
+                    logger.exception("本地 build123d 资产持久化失败")
+                    diagnostics.append({
+                        "level": "error",
+                        "title": "CAD 资产入库失败",
+                        "detail": "CAD 资产持久化失败，请稍后重试。",
+                    })
+            else:
+                try:
+                    forgecad_request = ForgeCadGenerateRequest(
+                        prompt=self._build_forgecad_prompt(project_name, request, design_spec),
+                        exportFormat="none",
+                        runCli=True,
+                        action="create" if request.mode == "create" else "derive",
+                        sourceObject=project_name,
+                    )
+                    forgecad_result = await self.ai_model_gateway.generate_cad(
+                        forgecad_request,
+                        db=db,
+                        user_id=user_id,
+                        task_id=workflow_id,
+                        publish_assets=False,
+                    )
+                    forgecad_data = forgecad_result.model_dump(by_alias=True)
+                    outputs.update({
+                        "modelScriptAssetId": forgecad_data.get("scriptAssetId"),
+                        "modelScript": (
+                            self._asset_url(str(forgecad_data["scriptAssetId"]))
+                            if forgecad_data.get("scriptAssetId")
+                            else None
+                        ),
+                        "modelOutputAssetId": forgecad_data.get("outputAssetId"),
+                        "modelDownloadUrl": forgecad_data.get("downloadUrl"),
+                        "forgecadTaskId": forgecad_data.get("taskId"),
+                    })
+                except ForgeCadServiceError as exc:
+                    logger.warning(
+                        "本地 CAD 脚本生成失败，error_code=%s",
+                        exc.error_code,
+                        exc_info=True,
+                    )
+                    diagnostics.append({
+                        "level": "warning",
+                        "title": "CAD 脚本生成失败",
+                        "detail": "CAD 脚本生成失败，请检查服务配置后重试。",
+                    })
+                except Exception as exc:
+                    logger.exception("本地 CAD 资产持久化失败")
+                    diagnostics.append({
+                        "level": "error",
+                        "title": "CAD 资产入库失败",
+                        "detail": "CAD 资产持久化失败，请稍后重试。",
+                    })
+
+        if request.options.generate_plan_line and self.build123d_service.available:
             try:
-                forgecad_request = ForgeCadGenerateRequest(
-                    prompt=self._build_forgecad_prompt(project_name, request, design_spec),
-                    exportFormat="none",
-                    runCli=True,
-                    action="create" if request.mode == "create" else "derive",
-                    sourceObject=project_name,
-                )
-                forgecad_result = await self.ai_model_gateway.generate_cad(
-                    forgecad_request,
+                line_result = await self.build123d_service.generate_plan_line(
+                    prompt=self._build_build123d_prompt(project_name, request, design_spec),
                     db=db,
                     user_id=user_id,
                     task_id=workflow_id,
                     publish_assets=False,
                 )
-                forgecad_data = forgecad_result.model_dump(by_alias=True)
                 outputs.update({
-                    "modelScriptAssetId": forgecad_data.get("scriptAssetId"),
-                    "modelScript": (
-                        self._asset_url(str(forgecad_data["scriptAssetId"]))
-                        if forgecad_data.get("scriptAssetId")
-                        else None
-                    ),
-                    "modelOutputAssetId": forgecad_data.get("outputAssetId"),
-                    "modelDownloadUrl": forgecad_data.get("downloadUrl"),
-                    "forgecadTaskId": forgecad_data.get("taskId"),
+                    "planLineSvgAssetId": line_result.get("planLineSvgAssetId"),
+                    "planLineDxfAssetId": line_result.get("planLineDxfAssetId"),
+                    "planLine": line_result.get("planLine"),
+                    "planLineDxf": line_result.get("planLineDxf"),
+                    "planLineTaskId": line_result.get("taskId"),
                 })
-            except ForgeCadServiceError as exc:
+            except Build123dServiceError as exc:
                 logger.warning(
-                    "本地 CAD 脚本生成失败，error_code=%s",
+                    "本地 CAD 线图生成失败，error_code=%s",
                     exc.error_code,
                     exc_info=True,
                 )
                 diagnostics.append({
                     "level": "warning",
-                    "title": "CAD 脚本生成失败",
-                    "detail": "CAD 脚本生成失败，请检查服务配置后重试。",
+                    "title": "2D 线图生成失败",
+                    "detail": "2D CAD 线图生成失败，请检查服务配置后重试。",
                 })
             except Exception as exc:
-                logger.exception("本地 CAD 资产持久化失败")
+                logger.exception("本地 CAD 线图资产持久化失败")
                 diagnostics.append({
                     "level": "error",
-                    "title": "CAD 资产入库失败",
-                    "detail": "CAD 资产持久化失败，请稍后重试。",
+                    "title": "2D 线图入库失败",
+                    "detail": "2D 线图资产持久化失败，请稍后重试。",
                 })
 
         if request.options.generate_three_preview:
@@ -532,6 +634,7 @@ class IndustrialDesignWorkflowService:
         requirements: list[tuple[bool, str, str]] = [
             *drawing_requirements,
             (request.options.generate_cad, "modelScriptAssetId", "ForgeCAD 脚本"),
+            (request.options.generate_plan_line, "planLineSvgAssetId", "2D 线图"),
             (request.options.generate_render, "renderPngAssetId", "设计效果图"),
             (request.options.generate_explosion, "explosionPngAssetId", "爆炸图"),
         ]
@@ -553,12 +656,15 @@ class IndustrialDesignWorkflowService:
         workflow_id = f"industrial_design_{uuid.uuid4().hex[:16]}"
         now = datetime.now(timezone.utc).isoformat()
         current_step = "工业品设计任务已提交，正在等待处理。"
-        if request.options.generate_drawing:
+        if request.options.generate_plan_line:
+            current_step = "工业品设计任务已提交，正在生成 2D CAD 线图。"
+        elif request.options.generate_drawing:
             current_step = "工业品设计任务已提交，正在生成设计图。"
         elif request.options.generate_render:
             current_step = "工业品设计任务已提交，正在生成精修图。"
         elif request.options.generate_cad or request.options.generate_three_preview:
-            current_step = "工业品设计任务已提交，正在调用本地部署 ForgeCAD 生成 3D/CAD。"
+            provider_label = "build123d" if self._cad_provider(request) == "build123d" else "ForgeCAD"
+            current_step = f"工业品设计任务已提交，正在调用本地部署 {provider_label} 生成 3D/CAD。"
 
         pending_task = {
             "taskId": workflow_id,
@@ -812,9 +918,108 @@ class IndustrialDesignWorkflowService:
                         diagnostics=diagnostics,
                     )
 
+        if request.options.generate_plan_line:
+            try:
+                await self._update_task(workflow_id, progress=15, current_step="正在基于需求生成 2D CAD 线图。")
+                with self.db_context_factory() as db:
+                    line_result = await self.build123d_service.generate_plan_line(
+                        prompt=self._build_build123d_prompt(project_name, request, design_spec),
+                        db=db,
+                        user_id=user_id,
+                        task_id=workflow_id,
+                        publish_assets=False,
+                    )
+                outputs.update({
+                    "planLineSvgAssetId": line_result.get("planLineSvgAssetId"),
+                    "planLineDxfAssetId": line_result.get("planLineDxfAssetId"),
+                    "planLine": line_result.get("planLine"),
+                    "planLineDxf": line_result.get("planLineDxf"),
+                    "planLineTaskId": line_result.get("taskId"),
+                })
+                await self._update_task(
+                    workflow_id,
+                    progress=25,
+                    current_step="2D CAD 线图已生成。",
+                    outputs=outputs,
+                )
+            except Build123dServiceError as exc:
+                logger.warning(
+                    "2D CAD 线图生成失败，error_code=%s",
+                    exc.error_code,
+                    exc_info=True,
+                )
+                diagnostics.append({
+                    "level": "warning",
+                    "title": "2D CAD 线图生成失败",
+                    "detail": "2D CAD 线图生成失败，请稍后重试。",
+                })
+                await self._update_task(
+                    workflow_id,
+                    progress=20,
+                    current_step="2D CAD 线图生成失败。",
+                    outputs=outputs,
+                    diagnostics=diagnostics,
+                )
+
         if request.options.generate_cad or request.options.generate_three_preview:
-            if request.options.generate_cad:
-                await self._update_task(workflow_id, progress=35, current_step="正在调用本地部署 ForgeCAD 生成 3D/CAD。")
+            if self._cad_provider(request) == "build123d":
+                try:
+                    await self._update_task(workflow_id, progress=35, current_step="正在调用 build123d 生成 3D 模型。")
+                    with self.db_context_factory() as db:
+                        build123d_result = await self.build123d_service.generate_model(
+                            prompt=self._build_build123d_prompt(project_name, request, design_spec),
+                            db=db,
+                            user_id=user_id,
+                            task_id=workflow_id,
+                            publish_assets=False,
+                            render_views=request.options.generate_render_views,
+                        )
+                    outputs.update({
+                        "modelScriptAssetId": build123d_result.get("modelScriptAssetId"),
+                        "modelScript": (
+                            self._asset_url(str(build123d_result["modelScriptAssetId"]))
+                            if build123d_result.get("modelScriptAssetId")
+                            else None
+                        ),
+                        "modelStepAssetId": build123d_result.get("modelStepAssetId"),
+                        "modelStep": build123d_result.get("modelStep"),
+                        "modelStlAssetId": build123d_result.get("modelStlAssetId"),
+                        "modelStl": build123d_result.get("modelStl"),
+                        "modelGlbAssetId": build123d_result.get("modelGlbAssetId"),
+                        "modelGlb": build123d_result.get("modelGlb"),
+                        "modelDownloadUrl": build123d_result.get("modelDownloadUrl"),
+                        "build123dTaskId": build123d_result.get("taskId"),
+                    })
+                    if build123d_result.get("renderViews"):
+                        outputs["renderViews"] = build123d_result["renderViews"]
+                        outputs["renderViewsPreview"] = build123d_result.get("renderViewsPreview")
+                    await self._update_task(
+                        workflow_id,
+                        progress=80,
+                        current_step="build123d 已完成 3D 模型生成。",
+                        outputs=outputs,
+                    )
+                except Build123dServiceError as exc:
+                    logger.warning(
+                        "build123d 生成失败，error_code=%s",
+                        exc.error_code,
+                        exc_info=True,
+                    )
+                    diagnostics.append({
+                        "level": "warning",
+                        "title": "3D 模型生成失败",
+                        "detail": "3D 模型生成失败，正在尝试备用能力。",
+                    })
+                    await self._update_task(
+                        workflow_id,
+                        progress=70,
+                        current_step="build123d 生成失败，继续尝试 Zoo 3D/CAD。",
+                        outputs=outputs,
+                        diagnostics=diagnostics,
+                    )
+            else:
+                if request.options.generate_cad:
+                    await self._update_task(workflow_id, progress=35, current_step="正在调用本地部署 ForgeCAD 生成 3D/CAD。")
             try:
                 forgecad_request = ForgeCadGenerateRequest(
                     prompt=forgecad_prompt,
@@ -943,6 +1148,7 @@ class IndustrialDesignWorkflowService:
             and (
                 outputs.get("renderPng")
             or outputs.get("drawingSvg")
+            or outputs.get("planLine")
             or outputs.get("modelGlb")
             or outputs.get("modelStep")
             or outputs.get("modelDownloadUrl")
@@ -950,6 +1156,7 @@ class IndustrialDesignWorkflowService:
                     (
                         request.options.generate_drawing,
                         request.options.generate_cad,
+                        request.options.generate_plan_line,
                         request.options.generate_render,
                         request.options.generate_explosion,
                     )
@@ -960,6 +1167,8 @@ class IndustrialDesignWorkflowService:
         if status == "completed":
             if outputs.get("renderPng"):
                 current_step = "设计图已生成，可在下方预览和继续修改。"
+            elif outputs.get("planLine"):
+                current_step = "2D CAD 线图已生成，可在下方预览和下载。"
             elif outputs.get("drawingSvg"):
                 current_step = "已生成本地工程图，可在下方预览和下载。"
             elif outputs.get("modelGlb") or outputs.get("modelStep") or outputs.get("modelDownloadUrl"):
@@ -1352,6 +1561,23 @@ class IndustrialDesignWorkflowService:
             request.text or "",
             *design_spec["assetSummaries"],
             "请生成可参数化调整的工业品/空间部件 ForgeCAD 脚本，并保留尺寸、装配关系和主要构件名称。",
+        ]
+        return "\n".join(item for item in lines if item)
+
+    def _build_build123d_prompt(
+        self,
+        project_name: str,
+        request: IndustrialDesignWorkflowRequest,
+        design_spec: dict[str, JSONValue],
+    ) -> str:
+        user_desc = self._extract_user_description(request.text or "")
+        lines = [
+            f"项目名称：{project_name}",
+            f"所属行业：{design_spec['industry']}",
+            f"输入类型：{request.input_type}",
+            user_desc or request.text or "",
+            *design_spec["assetSummaries"],
+            "请生成 build123d 代码，建模要求：结构完整、尺寸合理、可制造，单件模型即可（不需要装配体）。",
         ]
         return "\n".join(item for item in lines if item)
 

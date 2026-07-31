@@ -11,6 +11,10 @@ from app.types.json import JSONValue
 from app.schemas.ai_chat import AIChatCompletionMessage, AIChatCompletionRequest
 from app.schemas.forgecad import ForgeCadGenerateRequest, ForgeCadGenerateResult
 from app.services.ai_chat_gateway_service import ai_chat_gateway_service
+from app.services.cad_build123d_service import (
+    Build123dServiceError,
+    build123d_service,
+)
 from app.services.dashscope_image_service import DashScopeImageServiceError, dashscope_image_service
 from app.services.forgecad_service import ForgeCadServiceError, forgecad_service
 from app.services.image_prompt_optimizer_service import image_prompt_optimizer_service
@@ -69,6 +73,7 @@ class AIModelGatewayService:
         dashscope_image_service=dashscope_image_service,
         forgecad_service=forgecad_service,
         zoo_design_service=zoo_design_service,
+        build123d_service=build123d_service,
         nodapi_catalog_service=nodapi_catalog_service,
         prompt_optimizer_service=image_prompt_optimizer_service,
     ) -> None:
@@ -79,6 +84,7 @@ class AIModelGatewayService:
         self.dashscope_image_service = dashscope_image_service
         self.forgecad_service = forgecad_service
         self.zoo_design_service = zoo_design_service
+        self.build123d_service = build123d_service
         self.nodapi_catalog_service = nodapi_catalog_service
         self.prompt_optimizer_service = prompt_optimizer_service
 
@@ -95,6 +101,8 @@ class AIModelGatewayService:
                 "preferredProvider": "local-forgecad",
                 "forgecadBridgeConfigured": bool(str(getattr(self.forgecad_service, "bridge_base_url", "") or "").strip()),
                 "zooConfigured": bool(getattr(self.zoo_design_service, "configured", False)),
+                "build123dAvailable": bool(getattr(self.build123d_service, "available", False)),
+                "build123dConfigured": bool(getattr(self.build123d_service, "configured", False)),
             },
         }
 
