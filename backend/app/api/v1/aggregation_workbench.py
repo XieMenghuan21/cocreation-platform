@@ -17,6 +17,16 @@ class OptimizePromptRequest(BaseModel):
     model: str | None = Field(default=None, max_length=120)
 
 
+class CodexPromptWriterSkillResult(BaseModel):
+    skill: str
+    originalPrompt: str
+    optimizedPrompt: str
+    finalPrompt: str
+    enabled: bool
+    aiOptimized: bool
+    references: list[dict[str, object]]
+
+
 @router.get("/catalog")
 async def get_catalog(_user: dict = Depends(require_auth)) -> dict[str, Any]:
     """获取可用模型目录"""
@@ -35,3 +45,18 @@ async def optimize_prompt(payload: OptimizePromptRequest, _user: dict = Depends(
         "aiOptimized": result.get("aiOptimized", False),
         "references": result.get("references", []),
     }
+
+
+@router.post("/skill/prompt-writer", response_model=CodexPromptWriterSkillResult, summary="Codex Skill：生成高质量图片 Prompt")
+async def prompt_writer_skill(payload: OptimizePromptRequest, _user: dict = Depends(require_auth)) -> CodexPromptWriterSkillResult:
+    """Codex 级 Skill 接口：根据用户描述生成/优化图片生成 Prompt。"""
+    result = await image_prompt_optimizer_service.optimize(prompt=payload.prompt, model=payload.model)
+    return CodexPromptWriterSkillResult(
+        skill="prompt-writer",
+        originalPrompt=result.get("originalPrompt", ""),
+        optimizedPrompt=result.get("optimizedPrompt", ""),
+        finalPrompt=result.get("finalPrompt", ""),
+        enabled=result.get("enabled", True),
+        aiOptimized=result.get("aiOptimized", False),
+        references=result.get("references", []),
+    )
