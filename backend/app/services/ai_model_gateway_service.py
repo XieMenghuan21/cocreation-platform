@@ -22,6 +22,7 @@ from app.services.nodapi_catalog_service import nodapi_catalog_service
 from app.services.nodapi_chat_service import nodapi_chat_service
 from app.services.gemini_image_service import GeminiImageServiceError, gemini_image_service
 from app.services.nodapi_image_service import NodApiImageServiceError, nodapi_image_service
+from app.services.comfyui_image_service import ComfyUIImageServiceError, comfyui_image_service
 from app.services.official_chat_service import official_chat_service
 from app.services.zoo_design_service import zoo_design_service
 
@@ -71,6 +72,7 @@ class AIModelGatewayService:
         nodapi_chat_service=nodapi_chat_service,
         nodapi_image_service=nodapi_image_service,
         dashscope_image_service=dashscope_image_service,
+        comfyui_image_service=comfyui_image_service,
         forgecad_service=forgecad_service,
         zoo_design_service=zoo_design_service,
         build123d_service=build123d_service,
@@ -82,6 +84,7 @@ class AIModelGatewayService:
         self.nodapi_chat_service = nodapi_chat_service
         self.nodapi_image_service = nodapi_image_service
         self.dashscope_image_service = dashscope_image_service
+        self.comfyui_image_service = comfyui_image_service
         self.forgecad_service = forgecad_service
         self.zoo_design_service = zoo_design_service
         self.build123d_service = build123d_service
@@ -96,6 +99,7 @@ class AIModelGatewayService:
                 "defaultProvider": "auto",
                 "nodapiConfigured": bool(getattr(self.nodapi_image_service, "configured", False)),
                 "dashscopeConfigured": bool(getattr(self.dashscope_image_service, "configured", False)),
+                "comfyuiConfigured": bool(getattr(self.comfyui_image_service, "configured", False)) if self.comfyui_image_service else False,
             },
             "cad3d": {
                 "preferredProvider": "local-forgecad",
@@ -210,14 +214,22 @@ class AIModelGatewayService:
         auto_retry = not provider
         provider_candidates = [provider_name]
         if auto_retry:
-            for candidate in ("dashscope", "gemini", "nodapi"):
+            for candidate in ("comfyui", "dashscope", "gemini", "nodapi"):
                 if candidate != provider_name and self.image_provider_configured(candidate):
                     provider_candidates.append(candidate)
 
         last_error: Exception | None = None
         for candidate in provider_candidates:
             try:
-                if candidate == "dashscope":
+                if candidate == "comfyui":
+                    if self.comfyui_image_service is None:
+                        raise ComfyUIImageServiceError(
+                            "ComfyUI 图片服务未初始化",
+                            "COMFYUI_NOT_INITIALIZED",
+                            status_code=503,
+                        )
+                    result = await self.comfyui_image_service.generate_design_image(prompt=final_prompt, images=images, model=model)
+                elif candidate == "dashscope":
                     result = await self.dashscope_image_service.generate_design_image(prompt=final_prompt, images=images, model=model)
                 elif candidate == "gemini":
                     result = await gemini_image_service.generate_design_image(prompt=final_prompt, images=images, model=model)
@@ -239,7 +251,7 @@ class AIModelGatewayService:
                 normalized_result["provider"] = candidate
                 normalized_result["promptMeta"] = prompt_meta
                 return normalized_result
-            except (NodApiImageServiceError, DashScopeImageServiceError, GeminiImageServiceError) as exc:
+            except (NodApiImageServiceError, DashScopeImageServiceError, GeminiImageServiceError, ComfyUIImageServiceError) as exc:
                 last_error = exc
                 if not auto_retry:
                     raise
@@ -278,6 +290,8 @@ class AIModelGatewayService:
 
     def image_provider_label(self) -> str:
         providers = []
+        if self.comfyui_image_configured():
+            providers.append("ComfyUI")
         if self.gemini_image_configured():
             providers.append("Gemini")
         if self.dashscope_image_configured():
@@ -287,7 +301,7 @@ class AIModelGatewayService:
         return " + ".join(providers) if providers else "未配置"
 
     def image_configured(self) -> bool:
-        return self.dashscope_image_configured() or self.gemini_image_configured() or self.nodapi_image_configured()
+        return self.comfyui_image_configured() or self.dashscope_image_configured() or self.gemini_image_configured() or self.nodapi_image_configured()
 
     def nodapi_image_configured(self) -> bool:
         return bool(getattr(self.nodapi_image_service, "configured", False))
@@ -298,8 +312,16 @@ class AIModelGatewayService:
     def dashscope_image_configured(self) -> bool:
         return bool(getattr(self.dashscope_image_service, "configured", False))
 
+    def comfyui_image_configured(self) -> bool:
+        return bool(
+            self.comfyui_image_service
+            and getattr(self.comfyui_image_service, "configured", False)
+        )
+
     def image_provider_configured(self, provider: str | None = None) -> bool:
         provider_name = self._normalize_provider(provider or "nodapi")
+        if provider_name == "comfyui":
+            return self.comfyui_image_configured()
         if provider_name == "dashscope":
             return self.dashscope_image_configured()
         if provider_name == "gemini":
@@ -346,6 +368,7 @@ class AIModelGatewayService:
         models.extend(self._gemini_model_catalog(self.gemini_image_configured()))
         models.extend(self._nodapi_image_model_catalog(self.nodapi_image_configured()))
         models.extend(self._dashscope_image_model_catalog(self.dashscope_image_configured()))
+        models.extend(self._comfyui_model_catalog(self.comfyui_image_configured()))
         models.extend(self._official_chat_catalog())
         raw_snapshots: list[dict[str, JSONValue]] = []
 
@@ -364,6 +387,7 @@ class AIModelGatewayService:
                 "dashscope": self.dashscope_image_configured(),
                 "gemini": self.gemini_image_configured(),
                 "nodapi": self.nodapi_image_configured(),
+                "comfyui": self.comfyui_image_configured(),
             },
             "balance": None,
             "unit": "模型",
@@ -554,6 +578,25 @@ class AIModelGatewayService:
             }
         ]
 
+    def _comfyui_model_catalog(self, connected: bool) -> list[dict[str, JSONValue]]:
+        if not connected:
+            return []
+        label = str(getattr(settings, "COMFYUI_MODEL_LABEL", "") or "ComfyUI").strip()
+        return [
+            {
+                "id": "comfyui-flux",
+                "label": label,
+                "expectedType": "image",
+                "connected": connected,
+                "platformName": "comfyui-flux",
+                "platformDisplayName": label,
+                "platformType": "image",
+                "description": "自建 ComfyUI（RTX 5090）FLUX.1-schnell 文生图/图生图" if connected else "ComfyUI 图片服务未配置",
+                "tags": ["comfyui", "flux", "local", "image"],
+                "provider": "comfyui",
+            }
+        ]
+
     @classmethod
     def _curate_catalog_models(cls, models: list[dict[str, JSONValue]]) -> list[dict[str, JSONValue]]:
         curated: dict[tuple[str, str], dict[str, JSONValue]] = {}
@@ -648,6 +691,8 @@ class AIModelGatewayService:
             return "gemini"
         if normalized in {"dashscope", "qwen", "qianwen", "tongyi", "aliyun", "ali", "阿里云"}:
             return "dashscope"
+        if normalized in {"comfyui", "flux", "comfy", "sd", "stable_diffusion", "stable-diffusion"}:
+            return "comfyui"
         return normalized
 
     @classmethod
@@ -657,10 +702,14 @@ class AIModelGatewayService:
             return "dashscope"
         if any(keyword in normalized for keyword in ("gemini", "google", "imagen")):
             return "gemini"
+        if any(keyword in normalized for keyword in ("comfyui", "flux", "comfy", "sd", "stable_diffusion", "stable-diffusion")):
+            return "comfyui"
         return "nodapi"
 
     def _resolve_auto_image_provider(self) -> tuple[str, str | None]:
         """自动模式下按优先级选择已配置的图片生成 Provider，返回 (provider_name, model)。"""
+        if self.comfyui_image_configured():
+            return ("comfyui", None)
         if self.dashscope_image_configured():
             return ("dashscope", "qwen-image-max")
         if self.gemini_image_configured():

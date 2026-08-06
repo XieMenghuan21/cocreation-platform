@@ -237,6 +237,20 @@ class Settings(BaseSettings):
     NODAPI_IMAGE_TIMEOUT_SECONDS: float = 420.0
     NODAPI_IMAGE_RETRY_COUNT: int = 1
     NODAPI_IMAGE_RETRY_DELAY_SECONDS: float = 3.0
+    # ComfyUI 自建图片服务
+    COMFYUI_BASE_URL: str = ""
+    COMFYUI_TIMEOUT_SECONDS: float = 300.0
+    COMFYUI_POLL_INTERVAL_SECONDS: float = 2.0
+    COMFYUI_IMAGE_SIZE: str = "1024x1024"
+    COMFYUI_STEPS: int = 4
+    COMFYUI_FIXED_SEED: int = 0
+    COMFYUI_IMG2IMG_DENOISE: float = 0.6
+    COMFYUI_UNET_NAME: str = "flux1-schnell.safetensors"
+    COMFYUI_CLIP_NAME1: str = "clip_l.safetensors"
+    COMFYUI_CLIP_NAME2: str = "t5xxl_fp8.safetensors"
+    COMFYUI_VAE_NAME: str = "flux_ae.safetensors"
+    COMFYUI_OUTPUT_PREFIX: str = "cocreation"
+    COMFYUI_MODEL_LABEL: str = "FLUX.1-schnell (ComfyUI)"
     # NodAPI Midjourney
     NODAPI_MIDJOURNEY_PROMPT_SUFFIX: str = "--ar 3:2"
     NODAPI_MIDJOURNEY_TIMEOUT_SECONDS: float = 900.0

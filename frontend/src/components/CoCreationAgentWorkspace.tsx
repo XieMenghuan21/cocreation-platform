@@ -720,9 +720,11 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
       }));
       setImageModelOptions(normalizedOptions);
       if (!imageModelPreferenceAppliedRef.current) {
-        const preferredNodapi = normalizedOptions.find((m) => m.connected && m.provider === 'nodapi');
-        if (preferredNodapi) {
-          setSelectedImageModelId(preferredNodapi.id);
+        const preferredComfyui = normalizedOptions.find((m) => m.connected && m.provider === 'comfyui');
+        const preferredModel = preferredComfyui
+          ?? normalizedOptions.find((m) => m.connected && m.provider === 'nodapi');
+        if (preferredModel) {
+          setSelectedImageModelId(preferredModel.id);
         }
         imageModelPreferenceAppliedRef.current = true;
       }
@@ -2013,29 +2015,46 @@ const CoCreationAgentWorkspace: React.FC<{ variant?: 'standalone' | 'embedded' }
     }
     if (activeStepId === 'stepFile') {
       const stepUrl = getCadAiOutputValue(stepOutputs, ['modelStep', 'modelDownloadUrl']);
-      if (stepUrl) {
+      const stlUrl = normalizePreviewImageSource(getCadAiOutputValue(stepOutputs, ['modelStl']));
+      if (stepUrl || stlUrl) {
         return (
-          <div className={`relative flex ${workspacePreviewHeightClass} items-center justify-center overflow-hidden rounded-lg bg-white p-4`}>
-            <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-6 text-center shadow-sm">
-              <FileStack className="mx-auto h-12 w-12 text-emerald-500" />
-              <div className="mt-4 text-lg font-extrabold text-slate-900">STEP 图已生成</div>
-              <div className="mt-2 text-sm leading-6 text-slate-500">
-                STEP 数模已导出，可下载用于代工与后续制造。
+          <div className={`relative ${workspacePreviewHeightClass} overflow-auto rounded-lg bg-white p-4`}>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold text-blue-600">STEP 图 · 3D 数模</span>
+              <span className="text-[10px] text-slate-400">STL 网格预览（几何与 STEP 一致）</span>
+            </div>
+            {stlUrl ? (
+              <div className="h-[calc(100%-7rem)] min-h-[380px] overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <GeneratedStlPreview downloadUrl={stlUrl} />
               </div>
-              <a
-                href={stepUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700"
-              >
-                <Download className="h-4 w-4" />
-                下载 STEP 文件
-              </a>
+            ) : (
+              <div className={`relative flex ${workspacePreviewHeightClass} items-center justify-center overflow-hidden rounded-lg bg-white`}>
+                <div className="w-full max-w-md rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-6 text-center shadow-sm">
+                  <FileStack className="mx-auto h-12 w-12 text-emerald-500" />
+                  <div className="mt-4 text-lg font-extrabold text-slate-900">STEP 图已生成</div>
+                  <div className="mt-2 text-sm leading-6 text-slate-500">
+                    STEP 数模已导出，可下载用于代工与后续制造。
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {stepUrl ? (
+                <a
+                  href={stepUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700"
+                >
+                  <Download className="h-4 w-4" />
+                  下载 STEP 文件
+                </a>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void handleExportEngineeringPackage()}
                 disabled={isPackaging}
-                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 py-2.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Download className="h-4 w-4" />
                 {isPackaging ? '打包中...' : '导出工程设计包'}
