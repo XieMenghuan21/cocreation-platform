@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import os
 import re
 import tempfile
 import uuid
@@ -36,6 +37,23 @@ _REVIEW_SYSTEM_PROMPT = """你是资深机械设计制造专家，负责对 AI �
 只输出报告正文，不要 markdown 标题，用自然段落和编号列表。"""
 
 _REVIEW_FONT = "NotoSansCJK"
+
+_CJK_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+]
+
+
+def _resolve_cjk_font() -> Path | None:
+    configured = os.getenv("KNOWLEDGE_FONT_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    for candidate in _CJK_FONT_CANDIDATES:
+        if Path(candidate).is_file():
+            return Path(candidate)
+    return None
 
 
 class DesignReviewServiceError(Exception):
@@ -277,13 +295,19 @@ class DesignReviewService:
                 status_code=503,
             ) from exc
 
-        font_path = Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")
+        font_path = _resolve_cjk_font()
+        if font_path is None:
+            raise DesignReviewServiceError(
+                "审查报告生成失败：未找到系统中文字体",
+                "REVIEW_PDF_FONT_UNAVAILABLE",
+                status_code=503,
+            )
         try:
             if _REVIEW_FONT not in pdfmetrics.getRegisteredFontNames():
                 pdfmetrics.registerFont(TTFont(_REVIEW_FONT, str(font_path)))
         except Exception as exc:
             raise DesignReviewServiceError(
-                "审查报告生成失败：缺少系统中文字体（fonts-noto-cjk）",
+                f"审查报告生成失败：无法加载中文字体 {font_path}",
                 "REVIEW_PDF_FONT_UNAVAILABLE",
                 status_code=503,
             ) from exc

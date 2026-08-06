@@ -97,7 +97,9 @@ print("HLR_OK")
 
 _RENDER_SCRIPT = """\
 import os
-os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
+import platform as _b123_platform
+if _b123_platform.system().lower() == "linux":
+    os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 import sys
 import numpy as np
 import pyrender
@@ -262,7 +264,8 @@ class Build123dService:
             "DATABASE_URL",
         ):
             env.pop(key, None)
-        env["PYOPENGL_PLATFORM"] = "osmesa"
+        if sys.platform.startswith("linux"):
+            env["PYOPENGL_PLATFORM"] = "osmesa"
         return env
 
     async def _request_llm(

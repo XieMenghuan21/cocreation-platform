@@ -16,6 +16,7 @@ build/
 
 # 运行时数据
 backend/cocreation.db
+backend/cocreation.db.bak
 backend/storage/
 backend/uploads/
 

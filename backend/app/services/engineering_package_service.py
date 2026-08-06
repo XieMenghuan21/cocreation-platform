@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import tempfile
 import uuid
@@ -35,6 +36,23 @@ ASSET_KEYS: list[tuple[str, str, str]] = [
 
 _PDF_TITLE_FONT = "NotoSansCJK"
 _PDF_BODY_FONT = "NotoSansCJK"
+
+_CJK_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+]
+
+
+def _resolve_cjk_font() -> Path | None:
+    configured = os.getenv("KNOWLEDGE_FONT_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    for candidate in _CJK_FONT_CANDIDATES:
+        if Path(candidate).is_file():
+            return Path(candidate)
+    return None
 
 
 class EngineeringPackageServiceError(Exception):
@@ -149,13 +167,19 @@ class EngineeringPackageService:
                 status_code=503,
             ) from exc
 
-        font_path = Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")
+        font_path = _resolve_cjk_font()
+        if font_path is None:
+            raise EngineeringPackageServiceError(
+                "报告生成失败：未找到系统中文字体",
+                "PACKAGE_PDF_FONT_UNAVAILABLE",
+                status_code=503,
+            )
         try:
             if _PDF_TITLE_FONT not in pdfmetrics.getRegisteredFontNames():
                 pdfmetrics.registerFont(TTFont(_PDF_TITLE_FONT, str(font_path)))
         except Exception as exc:
             raise EngineeringPackageServiceError(
-                "报告生成失败：缺少系统中文字体（fonts-noto-cjk）",
+                f"报告生成失败：无法加载中文字体 {font_path}",
                 "PACKAGE_PDF_FONT_UNAVAILABLE",
                 status_code=503,
             ) from exc
