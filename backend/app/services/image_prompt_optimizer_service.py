@@ -397,7 +397,7 @@ class ImagePromptOptimizerService:
             "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
             "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
             "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. 输出为英文提示词，末尾中文括号补充简要说明。\n"
+            "6. 输出为中文提示词，包含产品名、材质、尺寸、多视图描述和质量词。\n"
             "7. 直接输出优化后的提示词，不要多余解释。\n"
             "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
@@ -483,7 +483,7 @@ class ImagePromptOptimizerService:
             "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
             "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
             "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. 输出为英文提示词，末尾中文括号补充简要说明。\n"
+            "6. 输出为中文提示词，包含产品名、材质、尺寸、多视图描述和质量词。\n"
             "7. 直接输出优化后的提示词，不要多余解释。\n"
             "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
