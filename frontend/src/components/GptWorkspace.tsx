@@ -24,6 +24,7 @@ import { GeneratedStlPreview } from './ThreeMeshPreview';
 import {
   createIndustrialDesignWorkflow,
   getIndustrialDesignWorkflowTask,
+  createEngineeringPackage,
   type CadAiTaskStatus,
   type IndustrialDesignWorkflowPayload,
 } from '../services/forgecadService';
@@ -1212,13 +1213,29 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       }
 
       if (nextAction === 'package') {
-        const msg: ChatMessage = {
-          id: nextId(),
-          role: 'assistant',
-          text: '工程包导出功能即将接入。',
-          status: 'completed',
-        };
-        setMessages((prev) => [...prev, msg]);
+        const lastTaskMsg = [...messages].reverse().find((m) => m.role === 'assistant' && m.taskId && m.status === 'completed');
+        const taskId = lastTaskMsg?.taskId;
+        if (!taskId) {
+          const msg: ChatMessage = { id: nextId(), role: 'assistant', text: '请先生成设计方案后再导出工程包。', status: 'completed' };
+          setMessages((prev) => [...prev, msg]);
+          return;
+        }
+        const statusMsg: ChatMessage = { id: nextId(), role: 'assistant', text: '正在生成工程设计包…', status: 'running' };
+        setMessages((prev) => [...prev, statusMsg]);
+        void (async () => {
+          try {
+            const result = await createEngineeringPackage(taskId);
+            patchMessage(statusMsg.id, {
+              status: 'completed',
+              text: `工程设计包已生成。\n文件名：${result.filename || 'package.zip'}\n[下载](${result.packageDownloadUrl || '#'})`,
+            });
+            void persistMessage('assistant', { id: statusMsg.id, role: 'assistant', text: `工程设计包已生成：${result.filename || 'package.zip'}`, status: 'completed' } as ChatMessage);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : '工程包导出失败';
+            patchMessage(statusMsg.id, { status: 'failed', text: message, error: message });
+          }
+        })();
+        return;
       }
     }
   }, [messages, pendingAttachments]);
