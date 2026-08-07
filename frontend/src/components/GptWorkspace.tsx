@@ -1015,6 +1015,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
       patchMessage(statusMessage.id, {
         status: 'completed',
+        text: '提示词已优化，可在卡片中确认或修改。',
         cards: [{
           id: `${statusMessage.id}-prompt`,
           type: 'prompt_confirm',
@@ -1026,8 +1027,10 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         }],
       });
     } catch {
+      pendingWorkflowRef.current = { ...ctx, text: ctx.text };
       patchMessage(statusMessage.id, {
         status: 'completed',
+        text: '提示词准备就绪，可在卡片中确认或修改。',
         cards: [{
           id: `${statusMessage.id}-prompt`,
           type: 'prompt_confirm',
