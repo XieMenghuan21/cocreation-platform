@@ -853,12 +853,16 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   };
 
   const runWorkflow = async (ctx: NonNullable<typeof pendingWorkflowRef.current>) => {
-    const { messageId, text, intent, projectId: projectIdValue } = ctx;
+    const { text, intent, projectId: projectIdValue } = ctx;
     workflowRunningRef.current = true;
-    patchMessage(messageId, { text: '方案生成中，请稍候…', status: 'running' });
 
-    const existingCards = messages.find((m) => m.id === messageId)?.cards ?? [];
-    const cardsRef: WorkflowCard[] = [...existingCards];
+    const statusMessage: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      text: '正在生成设计方案…',
+      status: 'running',
+    };
+    setMessages((prev) => [...prev, statusMessage]);
 
     try {
       const referenceAssetId = collectedMaterialsRef.current.referenceAssetId;
@@ -876,22 +880,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       };
 
       const task = await createIndustrialDesignWorkflow(payload);
-      cardsRef.push({
-        id: `${messageId}-status`,
+      const cardsRef: WorkflowCard[] = [{
+        id: `${statusMessage.id}-status`,
         type: 'status',
-        data: {
-          agent: 'design_agent',
-          task: '生成设计方案',
-          progress: 5,
-          stage: task.currentStep || '工业品设计任务已提交',
-          estimatedRemaining: '约 1-2 分钟',
-        },
-      });
-      patchMessage(messageId, {
-        taskId: task.taskId,
-        projectId: task.projectId || projectIdValue || null,
-        cards: [...cardsRef],
-      });
+        data: { agent: 'design_agent', task: '生成设计方案', progress: 5, stage: task.currentStep || '已提交', estimatedRemaining: '约 1-2 分钟' },
+      }];
+      patchMessage(statusMessage.id, { taskId: task.taskId, projectId: task.projectId || projectIdValue || null, cards: [...cardsRef] });
 
       const maxPoll = 120;
       let current = task;
@@ -899,101 +893,42 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         if (current.status === 'completed' || current.status === 'failed') break;
         await new Promise((resolve) => setTimeout(resolve, 3000));
         current = await getIndustrialDesignWorkflowTask(task.taskId);
-        const statusCardIndex = cardsRef.findIndex((c) => c.type === 'status');
-        if (statusCardIndex >= 0) {
-          cardsRef[statusCardIndex] = {
-            id: `${messageId}-status`,
-            type: 'status',
-            data: {
-              agent: 'design_agent',
-              task: '生成设计方案',
-              progress: current.progress,
-              stage: current.currentStep || '执行中',
-              estimatedRemaining: null,
-            },
-          };
-          patchMessage(messageId, { cards: [...cardsRef] });
-        }
+        cardsRef[0] = {
+          id: `${statusMessage.id}-status`,
+          type: 'status',
+          data: { agent: 'design_agent', task: '生成设计方案', progress: current.progress, stage: current.currentStep || '执行中', estimatedRemaining: null },
+        };
+        patchMessage(statusMessage.id, { cards: [...cardsRef] });
       }
 
-      if (current.status === 'failed') {
-        throw new Error(current.error || '方案生成失败');
-      }
+      if (current.status === 'failed') throw new Error(current.error || '方案生成失败');
 
       const outputs = current.outputs || EMPTY_OUTPUTS;
       const renderUrl = getCadAiOutputValue(outputs, ['renderPng', 'enhancedImage']);
       const drawingUrl = getCadAiOutputValue(outputs, ['drawingSvg']);
       const explosionUrl = getCadAiOutputValue(outputs, ['explosionPng']);
-      const schemeThumbnails = [
-        renderUrl,
-        explosionUrl,
-        drawingUrl,
-      ].filter((url): url is string => Boolean(url));
-      const statusCardIndex = cardsRef.findIndex((c) => c.type === 'status');
-      if (statusCardIndex >= 0) cardsRef.splice(statusCardIndex, 1);
-      cardsRef.push(
-        {
-          id: `${messageId}-scheme`,
-          type: 'design_scheme',
-          data: {
-            schemeId: `${messageId}-scheme`,
-            name: `${intent?.projectName || '设计方案'} · 方案A`,
-            thumbnails: schemeThumbnails,
-            materials: [],
-            estimatedPrice: null,
-            renderUrl: renderUrl || null,
-            drawingUrl: drawingUrl || null,
-            outputs,
-          },
-        },
-        {
-          id: `${messageId}-next`,
-          type: 'next_step',
-          data: {
-            current: 'design_completed',
-            recommendations: [
-              { label: '生成报价', agent: 'quote_agent', icon: '💰', action: 'quote' },
-              { label: '生成宣传图', agent: 'render_agent', icon: '🖼️', action: 'render' },
-              { label: '生成 3D 模型', agent: '3d_agent', icon: '📦', action: '3d' },
-              { label: '生成 CAD 图纸', agent: 'cad_agent', icon: '📐', action: 'cad' },
-              { label: '生成工程包', agent: 'production_agent', icon: '📋', action: 'package' },
-            ],
-          },
-        },
-      );
+      const schemeThumbnails = [renderUrl, explosionUrl, drawingUrl].filter((url): url is string => Boolean(url));
+      const resultCards: WorkflowCard[] = [
+        { id: `${statusMessage.id}-scheme`, type: 'design_scheme', data: { schemeId: `${statusMessage.id}-scheme`, name: `${intent?.projectName || '设计方案'} · 方案A`, thumbnails: schemeThumbnails, materials: [], estimatedPrice: null, renderUrl: renderUrl || null, drawingUrl: drawingUrl || null, outputs } },
+        { id: `${statusMessage.id}-next`, type: 'next_step', data: { current: 'design_completed', recommendations: [ { label: '生成报价', agent: 'quote_agent', icon: '💰', action: 'quote' }, { label: '生成宣传图', agent: 'render_agent', icon: '🖼️', action: 'render' }, { label: '生成 3D 模型', agent: '3d_agent', icon: '📦', action: '3d' }, { label: '生成 CAD 图纸', agent: 'cad_agent', icon: '📐', action: 'cad' }, { label: '生成工程包', agent: 'production_agent', icon: '📋', action: 'package' } ] } },
+      ];
 
       const done: ChatMessage = {
-        id: messageId,
-        role: 'assistant',
+        id: statusMessage.id, role: 'assistant',
         text: renderUrl || drawingUrl ? '方案已生成，点击下方卡片查看预览。' : '方案已生成。',
-        status: 'completed',
-        taskId: current.taskId,
-        projectId: current.projectId || projectIdValue,
-        versionId: current.versionId,
-        outputs,
-        cards: [...cardsRef],
+        status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId,
+        outputs, cards: resultCards,
       };
-      setMessages((prev) => prev.map((m) => (m.id === messageId ? done : m)));
+      setMessages((prev) => prev.map((m) => (m.id === statusMessage.id ? done : m)));
       applyMessageToPreview(done);
       if (done.outputs) setShowPreview(true);
-
-      if (done.projectId && onProjectLinked) {
-        onProjectLinked(done.projectId, done.projectId);
-      }
+      if (done.projectId && onProjectLinked) onProjectLinked(done.projectId, done.projectId);
       void persistMessage('assistant', done);
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
-      patchMessage(messageId, { status: 'failed', text: message, error: message });
-      void persistMessage('assistant', {
-        id: `${messageId}-error`,
-        role: 'assistant',
-        text: message,
-        status: 'failed',
-        error: message,
-      } as ChatMessage);
-    } finally {
-      workflowRunningRef.current = false;
-    }
+      patchMessage(statusMessage.id, { status: 'failed', text: message, error: message });
+      void persistMessage('assistant', { id: statusMessage.id, role: 'assistant', text: message, status: 'failed', error: message } as ChatMessage);
+    } finally { workflowRunningRef.current = false; }
   };
   runWorkflowRef.current = runWorkflow;
 
