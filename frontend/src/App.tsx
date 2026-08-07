@@ -19,6 +19,7 @@ const CoCreationHistoryPage = lazy(() => import('./components/CoCreationHistoryP
 const GptSidebar = lazy(() => import('./components/GptSidebar').then((module) => ({ default: module.GptSidebar })));
 const GptWorkspace = lazy(() => import('./components/GptWorkspace').then((module) => ({ default: module.GptWorkspace })));
 const QuotesPage = lazy(() => import('./components/QuotesPage').then((module) => ({ default: module.QuotesPage })));
+const WorkspaceShell = lazy(() => import('./components/workspace/WorkspaceShell').then((module) => ({ default: module.WorkspaceShell })));
 
 interface AuthState {
   user: SessionUser | null;
@@ -55,7 +56,7 @@ const LandingRoute: React.FC<{
         onEnter={() => navigate('/workspace')}
         onLogin={() => navigate('/login')}
         onSubmitPrompt={(prompt) => {
-          navigate(`/workspace?prompt=${encodeURIComponent(prompt)}`);
+          navigate(`/workspace?graph=1&prompt=${encodeURIComponent(prompt)}`);
         }}
       />
     </Suspense>
@@ -208,6 +209,20 @@ export const CoCreationStandaloneApp: React.FC = () => {
         }
       />
       <Route
+        path="/workspace/:conversationId"
+        element={
+          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
+            <StandaloneShell
+              isIframe={auth.isIframe}
+              userLabel={userLabel}
+              onLogout={handleLogout}
+              logoutError={logoutError}
+              graphMode
+            />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/workspace"
         element={
           <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
@@ -269,11 +284,14 @@ const StandaloneShell: React.FC<{
   userLabel: string;
   onLogout: () => Promise<void>;
   logoutError: string | null;
-}> = ({ isIframe, userLabel, onLogout, logoutError }) => {
+  graphMode?: boolean;
+}> = ({ isIframe, userLabel, onLogout, logoutError, graphMode = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [newChatKey, setNewChatKey] = useState(0);
+  const graphConversationId = (location.pathname.match(/^\/workspace\/([^/]+)/) || [])[1];
+  const isGraphMode = graphMode || searchParams.get('graph') === '1';
   const view: GptView = location.pathname.startsWith('/projects')
     ? 'projects'
     : location.pathname.startsWith('/assets')
@@ -289,7 +307,7 @@ const StandaloneShell: React.FC<{
 
   const handleNewChat = useCallback(() => {
     setNewChatKey((prev) => prev + 1);
-    navigate('/workspace', { replace: true });
+    navigate('/workspace?graph=1', { replace: true });
   }, [navigate]);
 
   useEffect(() => {
@@ -326,9 +344,8 @@ const StandaloneShell: React.FC<{
           }}
           onOpenConversation={(conversationId, title) => {
             const params = new URLSearchParams();
-            params.set('cid', conversationId);
             params.set('name', title);
-            navigate(`/workspace?${params.toString()}`);
+            navigate(`/workspace/${conversationId}?${params.toString()}`);
           }}
           onLogout={() => void onLogout()}
           activeProjectId={projectId}
@@ -351,7 +368,22 @@ const StandaloneShell: React.FC<{
 
         <div className="flex h-full min-h-0 flex-1">
           <Suspense fallback={<SurfaceLoader label="正在加载" />}>
-            {view === 'workspace' ? (
+            {isGraphMode ? (
+              <WorkspaceShell
+                key={newChatKey}
+                conversationId={graphConversationId}
+                initialPrompt={initialPrompt}
+                onConversationChanged={(cid, title) => {
+                  const params = new URLSearchParams();
+                  if (title) params.set('name', title);
+                  navigate(`/workspace/${cid}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+                }}
+                onNewChat={() => {
+                  setNewChatKey((prev) => prev + 1);
+                  navigate('/workspace?graph=1', { replace: true });
+                }}
+              />
+            ) : view === 'workspace' ? (
               <GptWorkspace
                 key={newChatKey}
                 initialPrompt={initialPrompt}
