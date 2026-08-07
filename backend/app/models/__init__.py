@@ -16,8 +16,19 @@ from app.models.persistence import (
     WorkflowTaskEvent,
     WorkspaceState,
 )
+from app.models.orchestration import (
+    AgentArtifactLink,
+    AgentRun,
+    AgentRunEvent,
+    WorkflowInstance,
+)
+from app.models.workspace_node import WorkspaceNode, WorkspaceNodeAsset
+from app.models.quote import QuoteLineItem, QuoteRecord
 
 __all__ = [
+    "AgentArtifactLink",
+    "AgentRun",
+    "AgentRunEvent",
     "Asset",
     "AssetBlobChunk",
     "Conversation",
@@ -26,9 +37,14 @@ __all__ = [
     "CocreationProjectHistory",
     "CocreationProjectVersionHistory",
     "CocreationVersionAssetEntry",
+    "QuoteLineItem",
+    "QuoteRecord",
     "SsoAuthorizationState",
     "UserSession",
     "WorkflowTask",
     "WorkflowTaskEvent",
+    "WorkspaceNode",
+    "WorkspaceNodeAsset",
     "WorkspaceState",
+    "WorkflowInstance",
 ]

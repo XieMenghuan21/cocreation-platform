@@ -111,6 +111,18 @@ class WorkflowTask(Base):
     user_id: Mapped[str] = mapped_column(String(120), index=True)
     project_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     version_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workspace_node_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("workspace_nodes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(64), index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     current_step: Mapped[str] = mapped_column(String(120), default="")
