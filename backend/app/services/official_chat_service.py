@@ -46,7 +46,7 @@ class OfficialChatService:
                     name="deepseek",
                     base_url=(settings.DEEPSEEK_BASE_URL or "https://api.deepseek.com").strip().rstrip("/"),
                     api_key=deepseek_key,
-                    default_model="deepseek-chat",
+                    default_model=(getattr(settings, "DEEPSEEK_MODEL", "") or "deepseek-chat").strip(),
                 )
             )
 

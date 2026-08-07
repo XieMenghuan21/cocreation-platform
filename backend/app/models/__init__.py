@@ -1,5 +1,6 @@
 """ORM 模型导出。"""
 
+from app.models.conversation import Conversation, ConversationMessage
 from app.models.cocreation_history import (
     CocreationAssetLibraryEntry,
     CocreationProjectHistory,
@@ -19,6 +20,8 @@ from app.models.persistence import (
 __all__ = [
     "Asset",
     "AssetBlobChunk",
+    "Conversation",
+    "ConversationMessage",
     "CocreationAssetLibraryEntry",
     "CocreationProjectHistory",
     "CocreationProjectVersionHistory",

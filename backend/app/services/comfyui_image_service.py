@@ -63,11 +63,32 @@ class ComfyUIImageService:
         filename = "comfyui_input.png"
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                image_response = await client.get(image_url)
-                image_response.raise_for_status()
+                if image_url.startswith("data:"):
+                    import base64
+
+                    comma_index = image_url.find(",")
+                    if comma_index == -1:
+                        raise ComfyUIImageServiceError(
+                            f"参考图 data URI 格式不合法：{image_url[:40]}",
+                            "COMFYUI_UPLOAD_FAILED",
+                            status_code=502,
+                        )
+                    encoded = image_url[comma_index + 1 :]
+                    try:
+                        image_bytes = base64.b64decode(encoded)
+                    except Exception as exc:
+                        raise ComfyUIImageServiceError(
+                            "参考图 base64 解码失败",
+                            "COMFYUI_UPLOAD_FAILED",
+                            status_code=502,
+                        ) from exc
+                else:
+                    image_response = await client.get(image_url)
+                    image_response.raise_for_status()
+                    image_bytes = image_response.content
                 upload_response = await client.post(
                     f"{self.base_url}/upload/image",
-                    files={"image": (filename, image_response.content, "image/png")},
+                    files={"image": (filename, image_bytes, "image/png")},
                     data={"overwrite": "true"},
                 )
                 upload_response.raise_for_status()

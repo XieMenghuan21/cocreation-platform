@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8001
 
+    # 后端对外可访问地址（供远程 ComfyUI 等服务回源下载资产）
+    SELF_PUBLIC_URL: str = "http://127.0.0.1:8001"
+
     # CORS 配置
     ALLOWED_ORIGINS_STR: str = (
         "http://localhost:5174,"
@@ -206,6 +209,7 @@ class Settings(BaseSettings):
     # 官方直连 API Key 配置
     DEEPSEEK_API_KEY: Optional[str] = None
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
     QWEN_API_KEY: Optional[str] = None
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"

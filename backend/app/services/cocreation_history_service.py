@@ -117,6 +117,54 @@ class CocreationHistoryService:
         db.flush()
         return {"projectId": project.project_id, "versionId": version_payload.id}
 
+    def create_project(
+        self,
+        db: Session,
+        *,
+        auth_user: dict[str, object],
+        name: str,
+        description: str = "",
+        industry: str | None = None,
+        input_mode: str = "prompt",
+    ) -> dict[str, JSONValue]:
+        """创建（或更新）一个项目实体，不强制创建版本。"""
+        user_id = auth_user_id(auth_user)
+        project_id = self._build_project_history_id(name)
+        now = datetime.now(timezone.utc).isoformat()
+        payload = ProjectRecordPayload(
+            id=project_id,
+            name=name,
+            industry=industry,
+            description=description,
+            inputMode=input_mode,
+            createdAt=now,
+            updatedAt=now,
+        )
+        with self.transaction_lock(
+            db,
+            user_id=user_id,
+            project_id=payload.id,
+        ):
+            try:
+                project = self._get_or_create_project(
+                    db,
+                    user_id=user_id,
+                    payload=payload,
+                )
+                self._refresh_project_summary(db, project)
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        return self._serialize_project(project)
+
+    @staticmethod
+    def _build_project_history_id(project_name: str) -> str:
+        import re
+
+        normalized = re.sub(r"\s+", "-", (project_name or "").strip())
+        return normalized or "unnamed-project"
+
     def list_history(
         self,
         db: Session,

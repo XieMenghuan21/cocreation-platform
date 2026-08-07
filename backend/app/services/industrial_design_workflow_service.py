@@ -277,7 +277,7 @@ class IndustrialDesignWorkflowService:
                 sizeBytes=assets_by_id[asset_id].size_bytes,
                 parseStatus="stored",
                 parseMessage="数据库资产已验证",
-                previewAssetUrl=None,
+                previewAssetUrl=self._asset_url(str(asset_id)),
             )
             for asset_id in ordered_ids
         ]
@@ -328,6 +328,8 @@ class IndustrialDesignWorkflowService:
             return True
         if request.options.generate_render and self.ai_model_gateway.image_configured():
             return True
+        if request.options.generate_explosion and self.ai_model_gateway.image_configured():
+            return True
         return False
 
     def _workflow_uses_external_images(
@@ -339,6 +341,7 @@ class IndustrialDesignWorkflowService:
             and (
                 request.options.generate_drawing
                 or request.options.generate_render
+                or request.options.generate_explosion
             )
         )
         enhances_uploaded_image = bool(
@@ -835,10 +838,11 @@ class IndustrialDesignWorkflowService:
             *[url for url in request.asset_urls if isinstance(url, str) and url.strip()],
             *[item.preview_asset_url for item in request.asset_metas if item.preview_asset_url],
         ]))
+        reference_urls = await self._resolve_reference_image_urls(reference_urls, user_id)
 
         if request.options.generate_drawing or request.options.generate_render:
             step_label = "设计图" if request.options.generate_drawing and not request.options.generate_render else "宣发图"
-            if request.options.generate_render:
+            if request.options.generate_render and request.options.enhance_image:
                 await self._update_task(workflow_id, progress=20, current_step="正在基于参考设计图生成场景融合宣发图。")
                 image_edit_result = await self._try_generate_enhanced_image(
                     request=request,
@@ -1117,7 +1121,50 @@ class IndustrialDesignWorkflowService:
         if request.options.generate_three_preview:
             outputs.setdefault("threePreview", self._build_three_preview_spec(project_name, request))
         if request.options.generate_explosion:
-            outputs.setdefault("explosionPng", None)
+            try:
+                await self._update_task(
+                    workflow_id,
+                    progress=40,
+                    current_step="正在生成平面爆炸分解图。",
+                )
+                explosion_prompt = self._build_explosion_image_prompt(project_name, request, design_spec)
+                explosion_result = await self._generate_external_design_image(
+                    prompt=explosion_prompt,
+                    images=reference_urls or None,
+                    optimize_prompt=request.options.optimize_prompt,
+                    image_model=getattr(request.options, 'image_model', None),
+                    image_provider=getattr(request.options, 'image_provider', None),
+                )
+                explosion_url = str(explosion_result.get("resultUrl") or "").strip()
+                if explosion_url:
+                    explosion_asset_id = await self._persist_generated_image_url(
+                        user_id=user_id,
+                        image_url=explosion_url,
+                        task_id=workflow_id,
+                        publish_asset=False,
+                    )
+                    outputs["explosionPngAssetId"] = explosion_asset_id
+                    outputs["explosionPng"] = self._asset_url(explosion_asset_id)
+                    outputs["explosionTaskId"] = explosion_result.get("taskId")
+                    outputs["explosionProvider"] = explosion_result.get("model")
+            except (NodApiImageServiceError, NodApiMidjourneyServiceError, GeminiImageServiceError, DashScopeImageServiceError) as exc:
+                logger.warning(
+                    "爆炸图生成失败，error_code=%s",
+                    exc.error_code,
+                    exc_info=True,
+                )
+                diagnostics.append({
+                    "level": "warning",
+                    "title": "爆炸图生成失败",
+                    "detail": "爆炸分解图生成失败，可稍后重试。",
+                })
+            except Exception as exc:
+                logger.exception("爆炸图资产持久化失败")
+                diagnostics.append({
+                    "level": "warning",
+                    "title": "爆炸图入库失败",
+                    "detail": "爆炸分解图资产持久化失败，可稍后重试。",
+                })
         if request.options.enhance_image and request.options.generate_render and not outputs.get("enhancedImage"):
             image_edit_result = await self._try_generate_enhanced_image(
                 request=request,
@@ -1147,6 +1194,7 @@ class IndustrialDesignWorkflowService:
             if not missing_assets
             and (
                 outputs.get("renderPng")
+            or outputs.get("explosionPng")
             or outputs.get("drawingSvg")
             or outputs.get("planLine")
             or outputs.get("modelGlb")
@@ -1167,6 +1215,8 @@ class IndustrialDesignWorkflowService:
         if status == "completed":
             if outputs.get("renderPng"):
                 current_step = "设计图已生成，可在下方预览和继续修改。"
+            elif outputs.get("explosionPng"):
+                current_step = "爆炸分解图已生成，可在下方预览和继续修改。"
             elif outputs.get("planLine"):
                 current_step = "2D CAD 线图已生成，可在下方预览和下载。"
             elif outputs.get("drawingSvg"):
@@ -1719,17 +1769,16 @@ class IndustrialDesignWorkflowService:
                 model=image_model,
                 provider=image_provider,
             )
-        # 当前设计/宣发链路统一固定走 NodAPI，避免落回未稳定接入的 3D/CAD 或其他图像通道。
+        # 默认固定走自建 ComfyUI（FLUX.1-schnell），不自动切换其他供应商。
         return await self.ai_model_gateway.generate_design_image(
             prompt=prompt,
             images=images,
             optimize_prompt=optimize_prompt,
-            model=str(getattr(settings, "NODAPI_IMAGE_MODEL", "gpt-image-2") or "gpt-image-2").strip(),
-            provider="nodapi",
+            provider="comfyui",
         )
 
     def _image_provider_label(self) -> str:
-        return "NodAPI"
+        return "本地 ComfyUI"
 
     async def _try_generate_enhanced_image(
         self,
@@ -1838,6 +1887,69 @@ class IndustrialDesignWorkflowService:
             if extension in image_extensions:
                 return item.asset_id
         return None
+
+    async def _resolve_reference_image_urls(
+        self,
+        urls: list[str],
+        user_id: str,
+    ) -> list[str]:
+        """把相对资产 URL（/api/...）转成可直接下载的 data: URI，供远程 ComfyUI 图生图使用。"""
+        resolved: list[str] = []
+        for url in urls:
+            if not url or url.startswith("data:"):
+                resolved.append(url)
+                continue
+            if url.startswith("/"):
+                asset_id = self._extract_asset_id_from_url(url)
+                if asset_id is None:
+                    continue
+                try:
+                    with self.db_context_factory() as db:
+                        content = self.asset_service.read_bytes(db, asset_id, user_id)
+                except Exception:
+                    logger.warning("参考图资产读取失败 asset_id=%s", asset_id, exc_info=True)
+                    continue
+                import base64
+
+                mime = "image/png"
+                encoded = base64.b64encode(content).decode("ascii")
+                resolved.append(f"data:{mime};base64,{encoded}")
+                continue
+            resolved.append(url)
+        return resolved
+
+    @staticmethod
+    def _extract_asset_id_from_url(url: str) -> UUID | None:
+        import re as _re
+
+        match = _re.search(r"/assets/([0-9a-fA-F-]{36})/download", url)
+        if match:
+            try:
+                return UUID(match.group(1))
+            except ValueError:
+                return None
+        return None
+
+    def _build_explosion_image_prompt(
+        self,
+        project_name: str,
+        request: IndustrialDesignWorkflowRequest,
+        design_spec: dict[str, JSONValue],
+    ) -> str:
+        user_desc = self._extract_user_description(request.text or "")
+        has_reference = bool(request.asset_urls or request.asset_metas)
+        lines = [
+            f"2D exploded assembly diagram for product project '{project_name}'.",
+            f"Industry: {design_spec['industry']}.",
+            "Style: flat technical exploded-view diagram, components separated along vertical axis showing assembly order, clean white background.",
+            "Quality: crisp engineering illustration, parts labeled by layout position, consistent perspective, high detail, no photo-realistic shading.",
+            "Composition: the whole product shown as an exploded assembly with each part floating apart in order, clear spatial relationship, suitable for manufacturing reference.",
+        ]
+        if has_reference:
+            lines.append("Keep the exact product form, structure, proportions and material cues from the reference product image; do not redesign a different product. Break it into its constituent parts in an exploded assembly view.")
+        if user_desc:
+            lines.append(f"User intent: {user_desc}")
+        return "\n".join(item for item in lines if item)
 
     def _build_enhance_image_prompt(
         self,
