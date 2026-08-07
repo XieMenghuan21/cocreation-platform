@@ -12,6 +12,7 @@ import {
   Boxes,
   PanelRightClose,
   PanelRight,
+  PanelLeft,
   FileText,
   Calculator,
   Paperclip,
@@ -34,7 +35,7 @@ import { getCadAiOutputValue } from './CoCreationAgentWorkspace.helpers';
 import { WorkflowCardView } from './workflowCards';
 import type { NextStepCardData, WorkflowCard } from './workflowCards/types';
 import { cocreationHistoryService } from '../services/cocreationHistoryService';
-import { getVersionsForProject } from './CoCreationAgentWorkspace.helpers';
+import { getVersionsForProject, normalizeVersionSnapshots } from './CoCreationAgentWorkspace.helpers';
 import type { VersionSnapshot } from './CoCreationAgentWorkspace.types';
 import { conversationService } from '../services/conversationService';
 import { assetService, assetDownloadUrl } from '../services/assetService';
@@ -114,6 +115,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [previewKind, setPreviewKind] = useState<'image' | 'stl' | 'plan'>('image');
   const [execLevel, setExecLevel] = useState<ExecLevel>('standard');
+  const [showResource, setShowResource] = useState(false);
+  const [resourceTab, setResourceTab] = useState<'assets' | 'versions' | 'files'>('assets');
+  const [resourceData, setResourceData] = useState<{
+    assets: Array<{ id: string; url: string; name: string; kind: string; createdAt: string }>;
+    versions: Array<{ id: string; label: string; imageUrl: string | null; status: string; createdAt: string }>;
+  }>({ assets: [], versions: [] });
   const [pendingAttachments, setPendingAttachments] = useState<Array<{
     assetId: string;
     url: string;
@@ -1318,6 +1325,69 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
   const displayProjectName = projectName || (projectId ? `项目 ${projectId}` : '新对话');
 
+  const loadResourceData = useCallback(async () => {
+    try {
+      const [assetsRes, historyRes] = await Promise.all([
+        assetService.listAll(),
+        cocreationHistoryService.listAllHistory(),
+      ]);
+      const assetItems = (assetsRes.items ?? []).map((a: { id: string; filename: string; kind: string; createdAt: string }) => ({
+        id: a.id, url: assetDownloadUrl(a.id), name: a.filename, kind: a.kind, createdAt: a.createdAt,
+      }));
+      const versionItems = normalizeVersionSnapshots(historyRes.data.snapshots || []).map((v: VersionSnapshot) => ({
+        id: v.id, label: v.label, imageUrl: v.previewImageUrl || null, status: v.status, createdAt: v.createdAt || '',
+      }));
+      setResourceData({ assets: assetItems, versions: versionItems });
+    } catch { setResourceData({ assets: [], versions: [] }); }
+  }, []);
+
+  useEffect(() => { void loadResourceData(); }, [loadResourceData, messages.length]);
+
+  const resourcePanel = (
+    <div className="flex h-full w-[220px] shrink-0 flex-col border-r border-slate-200 bg-[#fafafa]">
+      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2.5">
+        <span className="text-xs font-semibold text-slate-700">资源</span>
+        <button type="button" onClick={() => setShowResource(false)} className="flex size-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100">
+          <PanelRightClose className="size-3" />
+        </button>
+      </div>
+      <div className="flex border-b border-slate-100">
+        {(['assets','versions','files'] as const).map((tab) => (
+          <button key={tab} type="button" onClick={() => setResourceTab(tab)}
+            className={`flex-1 py-2 text-[11px] font-medium ${resourceTab===tab?'border-b-2 border-purple-500 text-purple-600':'text-slate-400 hover:text-slate-600'}`}>
+            {{assets:'资产',versions:'版本',files:'文件'}[tab]}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        {resourceTab === 'assets' ? (
+          resourceData.assets.length === 0 ? <p className="py-4 text-center text-[11px] text-slate-400">暂无资产</p> :
+          <div className="space-y-1.5">{resourceData.assets.slice(0,30).map((a) => (
+            <button key={a.id} type="button" onClick={() => {
+              const u = normalizePreviewImageSource(a.url);
+              if (u) { setPreviewSource(u); setPreviewKind('image'); setPreviewTab('image'); setShowPreview(true); }
+            }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-slate-50">
+              {a.kind==='image' ? <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100"><PreviewImage src={a.url} alt={a.name} className="h-full w-full object-cover" /></span>
+              : <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-400"><FileText className="size-3.5" /></span>}
+              <span className="min-w-0 flex-1 truncate text-[11px] text-slate-600">{a.name}</span>
+            </button>
+          ))}</div>
+        ) : resourceTab === 'versions' ? (
+          resourceData.versions.length === 0 ? <p className="py-4 text-center text-[11px] text-slate-400">暂无版本</p> :
+          <div className="space-y-1.5">{resourceData.versions.slice(0,30).map((v) => (
+            <button key={v.id} type="button" onClick={() => {
+              if(v.imageUrl){const u=normalizePreviewImageSource(v.imageUrl);if(u){setPreviewSource(u);setPreviewKind('image');setPreviewTab('image');setShowPreview(true);}}
+            }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-slate-50">
+              <span className={`flex size-2 shrink-0 rounded-full ${v.status==='completed'||v.status==='已完成'?'bg-emerald-500':v.status==='failed'?'bg-rose-500':'bg-amber-400'}`} />
+              <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-medium text-slate-700">{v.label}</span><span className="text-[10px] text-slate-400">{v.createdAt?.slice(0,10)}</span></span>
+              {v.imageUrl?<span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100"><PreviewImage src={v.imageUrl} alt={v.label} className="h-full w-full object-cover" /></span>:null}
+            </button>
+          ))}</div>
+        ) : <p className="py-4 text-center text-[11px] text-slate-400">文件功能完善中</p>}
+      </div>
+    </div>
+  );
+
   /* ── 聊天区（核心） ── */
   const chatPanel = (
     <div className="flex h-full min-w-0 flex-col bg-white">
@@ -1329,6 +1399,14 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           </span>
         ) : null}
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={() => { setShowResource((prev) => !prev); void loadResourceData(); }}
+          className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-50"
+        >
+          {showResource ? <PanelLeft className="size-3.5" /> : <PanelLeft className="size-3.5" />}
+          资源
+        </button>
         <button
           type="button"
           onClick={() => setShowPreview((prev) => !prev)}
@@ -1619,7 +1697,8 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   return (
     <div ref={bodyRef} className="flex h-full min-w-0 flex-1">
       <ResizablePanel
-        leftWidth={0}
+        left={showResource ? resourcePanel : null}
+        leftWidth={showResource ? 220 : 0}
         onLeftWidthChange={() => {}}
         center={chatPanel}
         right={showPreview ? previewPanel : null}
