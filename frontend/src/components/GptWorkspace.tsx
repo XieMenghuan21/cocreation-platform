@@ -38,6 +38,7 @@ import { getVersionsForProject } from './CoCreationAgentWorkspace.helpers';
 import type { VersionSnapshot } from './CoCreationAgentWorkspace.types';
 import { conversationService } from '../services/conversationService';
 import { assetService, assetDownloadUrl } from '../services/assetService';
+import { aggregationWorkbenchService } from '../services/aggregationWorkbenchService';
 
 interface ChatMessage {
   id: string;
@@ -989,6 +990,61 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   };
   runWorkflowRef.current = runWorkflow;
 
+  const showPromptCard = async (ctx: NonNullable<typeof pendingWorkflowRef.current>) => {
+    const statusMessage: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      text: '正在优化生成提示词…',
+      status: 'running',
+    };
+    setMessages((prev) => [...prev, statusMessage]);
+
+    try {
+      const materialText = Object.entries(collectedMaterialsRef.current)
+        .filter(([k, v]) => v && k !== 'raw' && k !== 'referenceAssetId')
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('；');
+      const rawPrompt = [ctx.text, materialText].filter(Boolean).join('。材料补充：');
+
+      const result = await aggregationWorkbenchService.optimizePrompt({
+        prompt: rawPrompt,
+        model: null,
+      });
+      const optimizedPrompt = result.data.optimizedPrompt || result.data.finalPrompt || rawPrompt;
+      pendingWorkflowRef.current = { ...ctx, text: optimizedPrompt };
+
+      patchMessage(statusMessage.id, {
+        status: 'completed',
+        text: `提示词已优化：\n\n${optimizedPrompt}`,
+        cards: [{
+          id: `${statusMessage.id}-prompt`,
+          type: 'next_step',
+          data: {
+            current: 'prompt_confirm',
+            recommendations: [
+              { label: '确认生成', agent: 'confirm', icon: '✅', action: 'quote' },
+            ],
+          },
+        }],
+      });
+    } catch {
+      patchMessage(statusMessage.id, {
+        status: 'completed',
+        text: `提示词准备就绪：\n\n${ctx.text}`,
+        cards: [{
+          id: `${statusMessage.id}-prompt`,
+          type: 'next_step',
+          data: {
+            current: 'prompt_confirm',
+            recommendations: [
+              { label: '确认生成', agent: 'confirm', icon: '✅', action: 'quote' },
+            ],
+          },
+        }],
+      });
+    }
+  };
+
   const triggerNextWorkflow = async (
     actionKind: string,
     intent: IntentAnalysis | null,
@@ -1141,7 +1197,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         confirmedRequirementRef.current.add(ctx.messageId);
         setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
         pendingWorkflowRef.current = null;
-        void runWorkflowRef.current?.({ ...ctx, text: fullRequirementText });
+        void showPromptCard({ ...ctx, text: fullRequirementText });
       }
       return;
     }
@@ -1151,7 +1207,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         confirmedRequirementRef.current.add(ctx.messageId);
         setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
         pendingWorkflowRef.current = null;
-        void runWorkflowRef.current?.(ctx);
+        void showPromptCard(ctx);
       }
       return;
     }
@@ -1161,7 +1217,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       confirmedRequirementRef.current.add(ctx.messageId);
       setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
       pendingWorkflowRef.current = null;
-      void runWorkflowRef.current?.(ctx);
+      void showPromptCard(ctx);
       return;
     }
     if (action === 'scheme.preview') {
@@ -1192,8 +1248,21 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       const isMaterialConfirm = card?.type === 'next_step'
         && ((card.data as NextStepCardData)?.current === 'materials_collected'
           || (card.data as NextStepCardData)?.current === 'ready_to_generate');
+      const isPromptConfirm = card?.type === 'next_step'
+        && (card.data as NextStepCardData)?.current === 'prompt_confirm';
 
       if (isMaterialConfirm) {
+        const ctx = pendingWorkflowRef.current;
+        if (ctx) {
+          confirmedRequirementRef.current.add(ctx.messageId);
+          setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
+          pendingWorkflowRef.current = null;
+          void showPromptCard(ctx);
+        }
+        return;
+      }
+
+      if (isPromptConfirm) {
         const ctx = pendingWorkflowRef.current;
         if (ctx) {
           confirmedRequirementRef.current.add(ctx.messageId);
