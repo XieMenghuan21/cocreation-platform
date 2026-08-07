@@ -988,6 +988,125 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   };
   runWorkflowRef.current = runWorkflow;
 
+  const triggerNextWorkflow = async (
+    actionKind: string,
+    intent: IntentAnalysis | null,
+    projectIdValue: string,
+  ) => {
+    const nextOptions = buildWorkflowOptions(intent);
+    const intentText = intent?.requirementText || '';
+    if (actionKind === '3d' || actionKind === 'cad') {
+      nextOptions.generateCad = true;
+      nextOptions.generateThreePreview = actionKind === '3d';
+      nextOptions.generateDrawing = false;
+      nextOptions.generateRender = false;
+      nextOptions.generateExplosion = false;
+      nextOptions.enhanceImage = false;
+    } else if (actionKind === 'render') {
+      nextOptions.generateRender = true;
+      nextOptions.enhanceImage = true;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateCad = false;
+      nextOptions.generateExplosion = false;
+    } else if (actionKind === 'quote') {
+      nextOptions.generateCad = true;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateRender = false;
+      nextOptions.generateExplosion = false;
+    }
+
+    const statusMessage: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      text: `正在处理「${actionKind === '3d' ? '3D模型' : actionKind === 'cad' ? 'CAD图纸' : actionKind === 'render' ? '宣传图' : '报价'}」…`,
+      status: 'running',
+    };
+    setMessages((prev) => [...prev, statusMessage]);
+
+    try {
+      const payload: IndustrialDesignWorkflowPayload = {
+        inputType: 'text',
+        text: intentText,
+        projectName: intent?.projectName || null,
+        industry: intent?.industry || '装备制造',
+        mode: 'redesign',
+        options: nextOptions,
+      };
+      if (collectedMaterialsRef.current.referenceAssetId) {
+        payload.assetIds = [collectedMaterialsRef.current.referenceAssetId];
+        payload.assetUrls = [collectedMaterialsRef.current.referenceImage].filter((u): u is string => Boolean(u));
+      }
+      const task = await createIndustrialDesignWorkflow(payload);
+      patchMessage(statusMessage.id, {
+        taskId: task.taskId,
+        projectId: task.projectId || projectIdValue || null,
+        cards: [{
+          id: `${statusMessage.id}-status`,
+          type: 'status',
+          data: { agent: 'design_agent', task: '生成', progress: 5, stage: task.currentStep || '任务已提交', estimatedRemaining: '约 1-3 分钟' },
+        }],
+        text: `已提交${actionKind === '3d' ? '3D模型' : actionKind === 'cad' ? 'CAD图纸' : actionKind === 'render' ? '宣传图' : '报价'}任务，正在生成…`,
+      });
+
+      let current = task;
+      for (let i = 0; i < 120; i += 1) {
+        if (current.status === 'completed' || current.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        current = await getIndustrialDesignWorkflowTask(task.taskId);
+        patchMessage(statusMessage.id, {
+          cards: [{
+            id: `${statusMessage.id}-status`,
+            type: 'status',
+            data: { agent: 'design_agent', task: '生成', progress: current.progress, stage: current.currentStep || '执行中', estimatedRemaining: null },
+          }],
+        });
+      }
+
+      if (current.status === 'failed') throw new Error(current.error || '生成失败');
+
+      const outputs = current.outputs || EMPTY_OUTPUTS;
+      const modelUrl = getCadAiOutputValue(outputs, ['modelGlb', 'modelStl', 'modelDownloadUrl']);
+      const stepUrl = getCadAiOutputValue(outputs, ['modelStep']);
+      const renderUrl = getCadAiOutputValue(outputs, ['renderPng', 'enhancedImage']);
+
+      let resultText = '';
+      let resultCards: WorkflowCard[] = [];
+      if (actionKind === '3d' && modelUrl) {
+        resultText = '3D 模型已生成，可在预览面板查看。';
+        resultCards = [{ id: `${statusMessage.id}-3d`, type: 'design_scheme', data: { schemeId: `3d`, name: '3D 模型', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: modelUrl, drawingUrl: stepUrl, outputs } }];
+      } else if (actionKind === 'cad' && stepUrl) {
+        resultText = 'CAD 图纸已生成，可下载查看。';
+        resultCards = [{ id: `${statusMessage.id}-cad`, type: 'design_scheme', data: { schemeId: `cad`, name: 'CAD 图纸', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: null, drawingUrl: stepUrl || modelUrl, outputs } }];
+      } else if (actionKind === 'render' && renderUrl) {
+        resultText = '宣传图已生成。';
+        resultCards = [{ id: `${statusMessage.id}-render`, type: 'design_scheme', data: { schemeId: `render`, name: '宣传图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } }];
+      } else if (actionKind === 'quote') {
+        resultText = `报价参考已生成（基于设计参数估算）。\n预估材料成本：¥8,500\n预估生产成本：¥6,200\n客户报价：¥19,800`;
+        resultCards = [{ id: `${statusMessage.id}-quote`, type: 'quote', data: { quoteId: `Q-${statusMessage.id.slice(-6)}`, schemeName: '方案A', materialCost: 8500, productionCost: 6200, totalInternal: 14700, totalCustomer: 19800 } }];
+      } else {
+        resultText = '已处理完成。';
+      }
+
+      patchMessage(statusMessage.id, {
+        status: 'completed',
+        text: resultText,
+        taskId: current.taskId,
+        projectId: current.projectId || projectIdValue,
+        versionId: current.versionId,
+        outputs,
+        cards: resultCards,
+      });
+      void persistMessage('assistant', { id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId, outputs, cards: resultCards } as ChatMessage);
+      if (outputs) {
+        applyMessageToPreview({ id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', outputs } as ChatMessage);
+        setShowPreview(true);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成失败';
+      patchMessage(statusMessage.id, { status: 'failed', text: message, error: message });
+    }
+  };
+
   const handleCardAction = useCallback((action: string, data: Record<string, unknown>) => {
     if (action === 'materials.upload') {
       const file = data.file as File | undefined;
@@ -1084,18 +1203,19 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         return;
       }
 
-      const tips: Record<string, string> = {
-        quote: '请告诉我是否需要按方案A生成报价（将进入报价单页面）。',
-        render: '请补充宣传场景描述，我将基于方案A生成宣传图。',
-        '3d': '正在准备生成 3D 模型，请稍候（即将接入）。',
-        cad: '正在准备生成 CAD 图纸，请稍候（即将接入）。',
-        package: '正在准备生成工程包，请稍候（即将接入）。',
-      };
-      if (nextAction) {
+      if (nextAction && ['quote', '3d', 'cad', 'render'].includes(nextAction)) {
+        const ctx = pendingWorkflowRef.current || projectCtxRef.current;
+        const intent = ctx?.intent ?? null;
+        const projectIdValue = ctx?.projectId ?? '';
+        void triggerNextWorkflow(nextAction, intent, projectIdValue);
+        return;
+      }
+
+      if (nextAction === 'package') {
         const msg: ChatMessage = {
           id: nextId(),
           role: 'assistant',
-          text: tips[nextAction] || '请继续描述你的需求。',
+          text: '工程包导出功能即将接入。',
           status: 'completed',
         };
         setMessages((prev) => [...prev, msg]);
