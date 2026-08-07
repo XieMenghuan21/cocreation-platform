@@ -721,23 +721,17 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         ? '已识别为宣发需求，将基于参考图生成宣传素材。'
         : '已识别为生产需求，将生成 CAD/图纸。';
 
-    const matMsg: ChatMessage = {
-      id: nextId(),
-      role: 'assistant',
+    patchMessage(ctx.messageId, {
       text: `项目「${ctx.projectName}」已确认，${actionHint}`,
-      status: 'completed',
-      projectId: ctx.projectId,
       cards: cardsRef,
-    };
-    setMessages((prev) => [...prev, matMsg]);
+    });
     pendingWorkflowRef.current = {
-      messageId: matMsg.id,
+      messageId: ctx.messageId,
       text: ctx.fullRequirement,
       intent: ctx.intent,
       projectId: ctx.projectId,
     };
-    void persistMessage('assistant', matMsg);
-  }, [persistMessage]);
+  }, []);
 
   const collectMaterial = async (text: string, userMessageId: string, ctx: NonNullable<typeof projectCtxRef.current>) => {
     const assistantMessage: ChatMessage = {
@@ -956,69 +950,37 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   runWorkflowRef.current = runWorkflow;
 
   const showPromptCard = async (ctx: NonNullable<typeof pendingWorkflowRef.current>) => {
-    const statusMessage: ChatMessage = {
-      id: nextId(),
-      role: 'assistant',
-      text: '正在优化生成提示词…',
-      status: 'running',
-    };
-    setMessages((prev) => [...prev, statusMessage]);
+    patchMessage(ctx.messageId, { text: '正在优化生成提示词…', status: 'running' });
 
     try {
       const mats = collectedMaterialsRef.current;
       const productName = ctx.intent?.projectName || '';
-      const materialLabel = mats.material || '';
-      const dimensionLabel = mats.dimension || '';
-      const styleLabel = mats.style || '';
-      const sceneLabel = mats.scene || '';
-      const featureLabel = mats.feature || '';
-
       const parts: string[] = [];
       if (productName) parts.push(`产品：${productName}`);
       if (ctx.text && ctx.text !== productName) parts.push(ctx.text);
-      if (materialLabel) parts.push(`材质：${materialLabel}`);
-      if (dimensionLabel) parts.push(`尺寸：${dimensionLabel}`);
-      if (styleLabel) parts.push(`风格：${styleLabel}`);
-      if (sceneLabel) parts.push(`使用场景：${sceneLabel}`);
-      if (featureLabel) parts.push(`特殊功能：${featureLabel}`);
+      if (mats.material) parts.push(`材质：${mats.material}`);
+      if (mats.dimension) parts.push(`尺寸：${mats.dimension}`);
+      if (mats.style) parts.push(`风格：${mats.style}`);
+      if (mats.scene) parts.push(`使用场景：${mats.scene}`);
+      if (mats.feature) parts.push(`特殊功能：${mats.feature}`);
       if (mats.referenceImage) parts.push('用户已提供参考图');
 
       const rawPrompt = parts.join('；') || ctx.text;
-
-      const result = await aggregationWorkbenchService.optimizePrompt({
-        prompt: rawPrompt,
-        model: null,
-      });
+      const result = await aggregationWorkbenchService.optimizePrompt({ prompt: rawPrompt, model: null });
       const optimizedPrompt = result.data.optimizedPrompt || result.data.finalPrompt || rawPrompt;
       pendingWorkflowRef.current = { ...ctx, text: optimizedPrompt };
 
-      patchMessage(statusMessage.id, {
+      patchMessage(ctx.messageId, {
         status: 'completed',
         text: '提示词已优化，可在卡片中确认或修改。',
-        cards: [{
-          id: `${statusMessage.id}-prompt`,
-          type: 'prompt_confirm',
-          data: {
-            original: ctx.text,
-            optimized: optimizedPrompt,
-            references: result.data.references || [],
-          },
-        }],
+        cards: [{ id: `${ctx.messageId}-prompt`, type: 'prompt_confirm', data: { original: ctx.text, optimized: optimizedPrompt, references: result.data.references || [] } }],
       });
     } catch {
       pendingWorkflowRef.current = { ...ctx, text: ctx.text };
-      patchMessage(statusMessage.id, {
+      patchMessage(ctx.messageId, {
         status: 'completed',
         text: '提示词准备就绪，可在卡片中确认或修改。',
-        cards: [{
-          id: `${statusMessage.id}-prompt`,
-          type: 'prompt_confirm',
-          data: {
-            original: ctx.text,
-            optimized: ctx.text,
-            references: [],
-          },
-        }],
+        cards: [{ id: `${ctx.messageId}-prompt`, type: 'prompt_confirm', data: { original: ctx.text, optimized: ctx.text, references: [] } }],
       });
     }
   };
