@@ -154,6 +154,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     intent: IntentAnalysis | null;
     fullRequirement: string;
   } | null>(null);
+  const projectConfirmedRef = useRef(false);
   const runWorkflowRef = useRef<((ctx: {
     messageId: string;
     text: string;
@@ -640,55 +641,13 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     ];
 
     const needsMaterials = intent?.needsMaterials ?? true;
-
-    if (needsMaterials) {
-      const materialFields = [
-        { key: 'referenceImage', label: '参考图', hint: '可上传类似款式或风格参考图' },
-        { key: 'material', label: '材质', hint: '金属 / 木材 / 塑料 / 陶瓷 / 玻璃等' },
-        { key: 'dimension', label: '尺寸', hint: '长宽高 / 重量 / 体积' },
-        { key: 'budget', label: '预算', hint: '预期造价范围' },
-        { key: 'scene', label: '使用场景', hint: '家居 / 办公 / 户外 / 工业等' },
-        { key: 'style', label: '风格', hint: '简约 / 科技感 / 复古 / 高端等' },
-        { key: 'feature', label: '特殊功能', hint: '必需的功能或特性' },
-        { key: 'brand', label: '品牌规范', hint: '需要遵循的品牌调性或规范' },
-      ];
-      const questions = materialFields.map((f) => `${f.label}：${f.hint}`);
-      setMaterialQuestions(questions);
-      setCollectedMaterials({});
-      cardsRef.push({
-        id: `${assistantMessage.id}-materials`,
-        type: 'materials_request',
-        data: {
-          projectName: project.name,
-          fields: materialFields.map((f) => ({ ...f, collected: false })),
-          collected: {},
-        },
-      });
-    } else {
-      cardsRef.push({
-        id: `${assistantMessage.id}-confirm`,
-        type: 'next_step',
-        data: {
-          current: 'ready_to_generate',
-          recommendations: [
-            { label: '开始生成', agent: 'confirm', icon: '✅', action: 'quote' },
-          ],
-        },
-      });
-    }
-
-    const actionHint = needsMaterials
-      ? '请补充设计材料（可逐条回复，也可直接描述）。'
-      : intent?.intent === 'propaganda'
-        ? '已识别为宣发需求，将基于参考图生成宣传素材。'
-        : intent?.intent === 'production'
-          ? '已识别为生产需求，将生成 CAD/图纸。'
-          : '将直接生成设计方案。';
+    setMaterialQuestions([]);
+    setCollectedMaterials({});
 
     const confirmed: ChatMessage = {
       id: assistantMessage.id,
       role: 'assistant',
-      text: `项目「${project.name}」已创建，${actionHint}`,
+      text: `项目「${project.name}」已创建，请确认项目信息。`,
       status: 'completed',
       projectId: project.id,
       cards: cardsRef,
@@ -708,13 +667,77 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       intent,
       projectId: project.id,
     };
+    projectConfirmedRef.current = false;
 
     void ensureConversation().then((cid) => {
-      if (cid) {
-        void persistMessage('assistant', confirmed);
-      }
+      if (cid) void persistMessage('assistant', confirmed);
     });
   };
+
+  const showMaterialsStep = useCallback(() => {
+    const ctx = projectCtxRef.current;
+    if (!ctx) return;
+    const intent = ctx.intent;
+    const needsMaterials = intent?.needsMaterials ?? true;
+
+    const cardsRef: WorkflowCard[] = [];
+
+    if (needsMaterials) {
+      const materialFields = [
+        { key: 'referenceImage', label: '参考图', hint: '可上传类似款式或风格参考图' },
+        { key: 'material', label: '材质', hint: '金属 / 木材 / 塑料 / 陶瓷 / 玻璃等' },
+        { key: 'dimension', label: '尺寸', hint: '长宽高 / 重量 / 体积' },
+        { key: 'budget', label: '预算', hint: '预期造价范围' },
+        { key: 'scene', label: '使用场景', hint: '家居 / 办公 / 户外 / 工业等' },
+        { key: 'style', label: '风格', hint: '简约 / 科技感 / 复古 / 高端等' },
+        { key: 'feature', label: '特殊功能', hint: '必需的功能或特性' },
+        { key: 'brand', label: '品牌规范', hint: '需要遵循的品牌调性或规范' },
+      ];
+      setMaterialQuestions(materialFields.map((f) => `${f.label}：${f.hint}`));
+      setCollectedMaterials({});
+      cardsRef.push({
+        id: `${ctx.messageId}-materials`,
+        type: 'materials_request',
+        data: {
+          projectName: ctx.projectName,
+          fields: materialFields.map((f) => ({ ...f, collected: false })),
+          collected: {},
+        },
+      });
+    } else {
+      cardsRef.push({
+        id: `${ctx.messageId}-confirm`,
+        type: 'next_step',
+        data: {
+          current: 'ready_to_generate',
+          recommendations: [{ label: '开始生成', agent: 'confirm', icon: '✅', action: 'quote' }],
+        },
+      });
+    }
+
+    const actionHint = needsMaterials
+      ? '请补充设计材料（可逐条回复，也可直接描述）。'
+      : intent?.intent === 'propaganda'
+        ? '已识别为宣发需求，将基于参考图生成宣传素材。'
+        : '已识别为生产需求，将生成 CAD/图纸。';
+
+    const matMsg: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      text: `项目「${ctx.projectName}」已确认，${actionHint}`,
+      status: 'completed',
+      projectId: ctx.projectId,
+      cards: cardsRef,
+    };
+    setMessages((prev) => [...prev, matMsg]);
+    pendingWorkflowRef.current = {
+      messageId: matMsg.id,
+      text: ctx.fullRequirement,
+      intent: ctx.intent,
+      projectId: ctx.projectId,
+    };
+    void persistMessage('assistant', matMsg);
+  }, [persistMessage]);
 
   const collectMaterial = async (text: string, userMessageId: string, ctx: NonNullable<typeof projectCtxRef.current>) => {
     const assistantMessage: ChatMessage = {
@@ -1181,13 +1204,14 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       }
       return;
     }
-    if (action === 'requirement.confirm' || action === 'project.confirm') {
+    if (action === 'project.confirm') {
       const ctx = pendingWorkflowRef.current;
       if (!ctx) return;
       confirmedRequirementRef.current.add(ctx.messageId);
       setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
       pendingWorkflowRef.current = null;
-      void showPromptCard(ctx);
+      projectConfirmedRef.current = true;
+      showMaterialsStep();
       return;
     }
     if (action === 'scheme.preview') {
