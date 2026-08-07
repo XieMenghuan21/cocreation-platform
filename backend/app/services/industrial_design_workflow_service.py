@@ -1676,6 +1676,15 @@ class IndustrialDesignWorkflowService:
         user_desc = self._extract_user_description(request.text or "")
         is_furniture_scene = self._looks_like_furniture_scene(request.industry, project_name, user_desc)
 
+        # 如果用户已提供详细设计稿描述（含多视图/材质/尺寸），直接用做 prompt
+        if user_desc and any(kw in user_desc for kw in ('设计稿','正视图','侧视图','顶视图','设计图','爆炸图','设计说明','三视图')):
+            lines = [
+                user_desc,
+                "industrial design specification sheet, orthographic projection, multi-view arrangement, dimension annotation, material callout, clean line work, white background, technical presentation layout, studio lighting, high detail",
+                "Negative: avoid blurry, deformed geometry, watermark, text artifacts, cluttered background.",
+            ]
+            return "\n".join(item for item in lines if item)
+
         if is_design_stage:
             if is_furniture_scene:
                 lines = [
