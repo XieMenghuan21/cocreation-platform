@@ -207,6 +207,56 @@ PROMPT_EXAMPLES: tuple[PromptExample, ...] = (
     ),
 )
 
+# ── 从 Prompt 花园加载通用提示词模板 ──
+
+def _load_garden_prompts() -> list[PromptReference]:
+    """从 docs/prompt-library/prompts.json 加载花园 Prompt 模板。"""
+    import json
+    import os
+
+    garden: list[PromptReference] = []
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "docs", "prompt-library", "prompts.json"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "docs", "prompt-library", "prompts.json"),
+    ]
+    path = None
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            path = candidate
+            break
+    if path is None:
+        return garden
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return garden
+    prompts = data.get("prompts") or []
+    if not isinstance(prompts, list):
+        prompts = []
+    for item in prompts:
+        if not isinstance(item, dict):
+            continue
+        raw_title = str(item.get("title") or "")
+        raw_prompt = str(item.get("prompt") or "")
+        if not raw_prompt.strip():
+            continue
+        # 去掉占位符，保留模板骨架，加上标题做标注
+        import re as _re
+        clean_prompt = _re.sub(r"{{[^}]+}}", "...", raw_prompt)
+        clean_prompt = _re.sub(r"\s+", " ", clean_prompt).strip()
+        garden.append(
+            PromptReference(
+                source="prompt-garden",
+                category=f"模板-{item.get('category', '通用')}",
+                prompt=f"[{raw_title}] {clean_prompt}",
+                tags=[str(t) for t in (item.get("tags") or [])],
+            )
+        )
+    return garden
+
+_GARDEN_PROMPTS: list[PromptReference] = _load_garden_prompts()
+
 
 class ImagePromptOptimizerService:
     """基于 API 对话模型优先、提示词库辅助的提示词检索与优化服务。"""
@@ -267,16 +317,37 @@ class ImagePromptOptimizerService:
         references = self.search(clean_prompt, limit=5)
         examples = self.search_examples(clean_prompt, limit=3)
 
+        # ── 知识库检索 ──
+        kb_hits: list[PromptReference] = []
+        try:
+            from app.services.knowledge_base_service import knowledge_base_service
+            kb_results = knowledge_base_service.search(clean_prompt, top_k=3)
+            if kb_results and isinstance(kb_results, list):
+                for hit in kb_results:
+                    if isinstance(hit, dict) and hit.get("text"):
+                        kb_hits.append(
+                            PromptReference(
+                                source="knowledge-base",
+                                category=f"知识库-{hit.get('source', '产业共享')}",
+                                prompt=str(hit["text"])[:800],
+                                tags=[],
+                            )
+                        )
+        except Exception as exc:
+            logger.debug("[PromptOptimizer] 知识库检索跳过: %s", exc)
+
+        all_references = references + kb_hits
+
         ai_optimized = None
         if self.dashscope_configured:
             try:
-                ai_optimized = await self._optimize_with_dashscope(clean_prompt, references, examples, images=images, model=model)
+                ai_optimized = await self._optimize_with_dashscope(clean_prompt, all_references, examples, images=images, model=model)
             except Exception as exc:
                 logger.warning("[PromptOptimizer] DashScope AI 优化失败，尝试 NodAPI / 规则拼接: %s", exc)
 
         if not ai_optimized and self.nodapi_configured:
             try:
-                ai_optimized = await self._optimize_with_nodapi(clean_prompt, references, examples, images=images, model=model)
+                ai_optimized = await self._optimize_with_nodapi(clean_prompt, all_references, examples, images=images, model=model)
             except Exception as exc:
                 logger.warning("[PromptOptimizer] NodAPI AI 优化失败，回退到规则拼接: %s", exc)
 
@@ -287,18 +358,18 @@ class ImagePromptOptimizerService:
                 "finalPrompt": ai_optimized,
                 "enabled": True,
                 "aiOptimized": True,
-                "references": [item.to_dict() for item in references],
+                "references": [item.to_dict() for item in all_references],
             }
 
         # 回退：规则拼接
-        optimized_prompt = self._build_optimized_prompt(clean_prompt, references, images=images, model=model)
+        optimized_prompt = self._build_optimized_prompt(clean_prompt, all_references, images=images, model=model)
         return {
             "originalPrompt": clean_prompt,
             "optimizedPrompt": optimized_prompt,
             "finalPrompt": optimized_prompt,
             "enabled": True,
             "aiOptimized": False,
-            "references": [item.to_dict() for item in references],
+            "references": [item.to_dict() for item in all_references],
         }
 
     async def _optimize_with_nodapi(
@@ -483,12 +554,14 @@ class ImagePromptOptimizerService:
         domain = self._classify_prompt_domain(prompt)
         query_phrases = self._extract_query_phrases(prompt)
         scored: list[PromptReference] = []
-        for item in PROMPT_REFERENCES:
-            if not self._reference_matches_domain(item, domain):
-                continue
-            score = self._score_reference(item, tokens, prompt, query_phrases)
-            if score > 0:
-                scored.append(PromptReference(item.source, item.category, item.prompt, item.tags, score))
+        for pool in (PROMPT_REFERENCES, _GARDEN_PROMPTS):
+            for item in pool:
+                if not self._reference_matches_domain(item, domain):
+                    continue
+                score = self._score_reference(item, tokens, prompt, query_phrases)
+                # 花园模板分数打折，只保留强匹配（>=6）
+                if score > 0 and (pool is not _GARDEN_PROMPTS or score >= 6):
+                    scored.append(PromptReference(item.source, item.category, item.prompt, item.tags, score))
         if not scored:
             scored = self._default_references_for_domain(domain)
         scored.sort(key=lambda item: item.score, reverse=True)
@@ -708,9 +781,10 @@ class ImagePromptOptimizerService:
         }
         allowed = domain_map.get(domain, domain_map["generic"])
         fallback: list[PromptReference] = []
-        for item in PROMPT_REFERENCES:
-            if item.category in allowed:
-                fallback.append(PromptReference(item.source, item.category, item.prompt, item.tags, 1))
+        for pool in (PROMPT_REFERENCES, _GARDEN_PROMPTS):
+            for item in pool:
+                if item.category in allowed or (pool is _GARDEN_PROMPTS and domain == "generic"):
+                    fallback.append(PromptReference(item.source, item.category, item.prompt, item.tags, 1))
         return fallback[:5]
 
     @staticmethod
