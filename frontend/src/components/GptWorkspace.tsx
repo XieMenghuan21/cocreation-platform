@@ -1015,30 +1015,26 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
       patchMessage(statusMessage.id, {
         status: 'completed',
-        text: `提示词已优化：\n\n${optimizedPrompt}`,
         cards: [{
           id: `${statusMessage.id}-prompt`,
-          type: 'next_step',
+          type: 'prompt_confirm',
           data: {
-            current: 'prompt_confirm',
-            recommendations: [
-              { label: '确认生成', agent: 'confirm', icon: '✅', action: 'quote' },
-            ],
+            original: ctx.text,
+            optimized: optimizedPrompt,
+            references: result.data.references || [],
           },
         }],
       });
     } catch {
       patchMessage(statusMessage.id, {
         status: 'completed',
-        text: `提示词准备就绪：\n\n${ctx.text}`,
         cards: [{
           id: `${statusMessage.id}-prompt`,
-          type: 'next_step',
+          type: 'prompt_confirm',
           data: {
-            current: 'prompt_confirm',
-            recommendations: [
-              { label: '确认生成', agent: 'confirm', icon: '✅', action: 'quote' },
-            ],
+            original: ctx.text,
+            optimized: ctx.text,
+            references: [],
           },
         }],
       });
@@ -1165,6 +1161,21 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   };
 
   const handleCardAction = useCallback((action: string, data: Record<string, unknown>) => {
+    if (action === 'prompt.confirm') {
+      const ctx = pendingWorkflowRef.current;
+      if (ctx) {
+        pendingWorkflowRef.current = null;
+        void runWorkflowRef.current?.(ctx);
+      }
+      return;
+    }
+    if (action === 'prompt.edit') {
+      const prompt = (data.prompt as string) || '';
+      if (prompt && pendingWorkflowRef.current) {
+        pendingWorkflowRef.current.text = prompt;
+      }
+      return;
+    }
     if (action === 'materials.upload') {
       const file = data.file as File | undefined;
       if (file) void handleFileUpload(file);
@@ -1248,8 +1259,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       const isMaterialConfirm = card?.type === 'next_step'
         && ((card.data as NextStepCardData)?.current === 'materials_collected'
           || (card.data as NextStepCardData)?.current === 'ready_to_generate');
-      const isPromptConfirm = card?.type === 'next_step'
-        && (card.data as NextStepCardData)?.current === 'prompt_confirm';
 
       if (isMaterialConfirm) {
         const ctx = pendingWorkflowRef.current;
@@ -1258,17 +1267,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
           pendingWorkflowRef.current = null;
           void showPromptCard(ctx);
-        }
-        return;
-      }
-
-      if (isPromptConfirm) {
-        const ctx = pendingWorkflowRef.current;
-        if (ctx) {
-          confirmedRequirementRef.current.add(ctx.messageId);
-          setConfirmedMessages((prev) => (prev.includes(ctx.messageId) ? prev : [...prev, ctx.messageId]));
-          pendingWorkflowRef.current = null;
-          void runWorkflowRef.current?.(ctx);
         }
         return;
       }

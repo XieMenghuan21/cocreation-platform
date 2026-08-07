@@ -6,7 +6,8 @@ export type CardType =
   | 'quote'
   | 'status'
   | 'next_step'
-  | 'materials_request';
+  | 'materials_request'
+  | 'prompt_confirm';
 
 export interface MaterialField {
   key: string;
@@ -68,6 +69,12 @@ export interface StatusCardData {
   estimatedRemaining: string | null;
 }
 
+export interface PromptCardData {
+  original: string;
+  optimized: string;
+  references: Array<{ source: string; prompt: string }>;
+}
+
 export interface NextStepRecommendation {
   label: string;
   agent: string;
@@ -83,7 +90,7 @@ export interface NextStepCardData {
 export interface WorkflowCard {
   id: string;
   type: CardType;
-  data: ProjectCreatedCardData | RequirementCardData | DesignSchemeCardData | QuoteCardData | StatusCardData | NextStepCardData | MaterialsRequestCardData;
+  data: ProjectCreatedCardData | RequirementCardData | DesignSchemeCardData | QuoteCardData | StatusCardData | NextStepCardData | MaterialsRequestCardData | PromptCardData;
 }
 
 export type CardDataByType = {
@@ -94,4 +101,5 @@ export type CardDataByType = {
   status: StatusCardData;
   next_step: NextStepCardData;
   materials_request: MaterialsRequestCardData;
+  prompt_confirm: PromptCardData;
 };

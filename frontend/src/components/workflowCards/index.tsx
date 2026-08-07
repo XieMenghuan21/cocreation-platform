@@ -26,6 +26,7 @@ import type {
   MaterialsRequestCardData,
   NextStepCardData,
   ProjectCreatedCardData,
+  PromptCardData,
   QuoteCardData,
   RequirementCardData,
   StatusCardData,
@@ -407,6 +408,81 @@ export const MaterialsRequestCard: React.FC<{
   );
 };
 
+/* ── 提示词确认卡片 ── */
+
+export const PromptCard: React.FC<{
+  data: PromptCardData;
+  onConfirm: () => void;
+  onEdit: (prompt: string) => void;
+}> = ({ data, onConfirm, onEdit }) => {
+  const [editing, setEditing] = React.useState(false);
+  const [edited, setEdited] = React.useState(data.optimized);
+  const hasRefs = data.references && data.references.length > 0;
+
+  const handleConfirm = () => {
+    if (editing) onEdit(edited);
+    else onConfirm();
+  };
+
+  return (
+    <CardShell icon={<Sparkles className="size-3.5" />} accent="purple" title="生成提示词">
+      <div className="space-y-2.5">
+        {editing ? (
+          <textarea
+            value={edited}
+            onChange={(e) => setEdited(e.target.value)}
+            rows={6}
+            className="w-full rounded-lg border border-purple-200 bg-purple-50/30 px-3 py-2 text-xs text-slate-800 outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+          />
+        ) : (
+          <div className="rounded-lg border border-purple-100 bg-purple-50/20 px-3 py-2.5 text-xs leading-relaxed text-slate-700 font-mono whitespace-pre-wrap">
+            {data.optimized}
+          </div>
+        )}
+
+        {data.original !== data.optimized ? (
+          <details className="text-[11px]">
+            <summary className="cursor-pointer text-slate-400 transition hover:text-slate-600">
+              查看原始提示词
+            </summary>
+            <div className="mt-1 rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-500 whitespace-pre-wrap font-mono">
+              {data.original}
+            </div>
+          </details>
+        ) : null}
+
+        {hasRefs ? (
+          <div className="flex flex-wrap gap-1 text-[10px]">
+            <span className="text-slate-400">知识库参考：</span>
+            {data.references.slice(0, 4).map((ref, i) => (
+              <span key={i} className="rounded-full border border-purple-100 bg-purple-50 px-1.5 py-0.5 text-purple-600" title={ref.prompt}>
+                {ref.source}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <CardAction onClick={handleConfirm} primary>
+          <Sparkles className="size-3" />
+          {editing ? '确认修改并生成' : '确认并生成'}
+        </CardAction>
+        {!editing ? (
+          <CardAction onClick={() => setEditing(true)}>
+            <PencilLine className="size-3" />
+            修改
+          </CardAction>
+        ) : (
+          <CardAction onClick={() => { setEditing(false); setEdited(data.optimized); }}>
+            取消修改
+          </CardAction>
+        )}
+      </div>
+    </CardShell>
+  );
+};
+
 export const NextStepCard: React.FC<{
   data: NextStepCardData;
   onAction: (action: NextStepCardData['recommendations'][number]) => void;
@@ -507,6 +583,16 @@ export const WorkflowCardView: React.FC<{
     case 'status': {
       const data = card.data as CardDataByType['status'];
       return <StatusCard data={data} />;
+    }
+    case 'prompt_confirm': {
+      const data = card.data as CardDataByType['prompt_confirm'];
+      return (
+        <PromptCard
+          data={data}
+          onConfirm={() => fire('prompt.confirm', {})}
+          onEdit={(prompt: string) => fire('prompt.edit', { prompt })}
+        />
+      );
     }
     case 'next_step': {
       const data = card.data as CardDataByType['next_step'];
