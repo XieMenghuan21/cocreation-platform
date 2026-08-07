@@ -104,6 +104,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [chatWidth, setChatWidth] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [previewTab, setPreviewTab] = useState<PreviewTab>('image');
@@ -273,7 +274,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           cards,
         };
       });
-      if (built.length > 0) {
+      if (built.length > 0 && !sendingRef.current) {
         setMessages(built);
       }
       const projectCtx = projectCtxRef.current;
@@ -493,6 +494,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         error: message,
       };
       setMessages((prev) => [...prev, errMsg]);
+      void persistMessage('assistant', errMsg);
     } finally {
       setUploading(false);
     }
@@ -544,6 +546,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     setPendingAttachments([]);
     setInput('');
     setSending(true);
+    sendingRef.current = true;
 
     const ctx = projectCtxRef.current;
 
@@ -573,6 +576,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       void persistMessage('assistant', errMsg);
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   };
 
@@ -971,6 +975,13 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
       patchMessage(messageId, { status: 'failed', text: message, error: message });
+      void persistMessage('assistant', {
+        id: `${messageId}-error`,
+        role: 'assistant',
+        text: message,
+        status: 'failed',
+        error: message,
+      } as ChatMessage);
     } finally {
       workflowRunningRef.current = false;
     }
