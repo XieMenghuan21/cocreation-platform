@@ -390,16 +390,16 @@ class ImagePromptOptimizerService:
         ) if examples else "无"
 
         system_prompt = (
-            "你是 AI 图片生成提示词优化师。任务是将用户设计需求优化为高质量图片生成提示词。\n"
+            "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 必须保留用户原始名词和主体语义，不要更换品类，不要把家具改为工业设备。\n"
-            "2. 严禁凭空捏造用户未提及的产品功能、结构、材质、尺寸、配件，只能使用用户明确给出的信息。\n"
-            "3. 从参考片段里只挑相关片段吸收，不套固定模板；不相关片段必须忽略。\n"
-            "4. 只补充画面质量描述词（光影、材质质感、构图、分辨率），不添加虚假细节。\n"
-            "5. 输出为简洁英文提示词，适合 Stable Diffusion / DALL-E / Midjourney。\n"
-            "6. 末尾用中文括号补充简要中文描述。\n"
+            "1. 输出为设计稿（design specification sheet），不是产品摄影图。包含：正视图、侧视图、顶视图、局部细节。\n"
+            "2. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构。\n"
+            "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
+            "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
+            "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
+            "6. 输出为英文提示词，末尾中文括号补充简要说明。\n"
             "7. 直接输出优化后的提示词，不要多余解释。\n"
-            "8. 用户描述简单时保持简洁，不要脑补成复杂产品（如'设计台灯'不要写成'智能调光无线充电折叠台灯'）。\n"
+            "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
 
         user_message = (
@@ -476,16 +476,16 @@ class ImagePromptOptimizerService:
         ) if examples else "无"
 
         system_prompt = (
-            "你是 AI 图片生成提示词优化师。任务是将用户设计需求优化为高质量图片生成提示词。\n"
+            "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 必须保留用户原始名词和主体语义，不要更换品类，不要把家具改为工业设备。\n"
-            "2. 严禁凭空捏造用户未提及的产品功能、结构、材质、尺寸、配件，只能使用用户明确给出的信息。\n"
-            "3. 从参考片段里只挑相关片段吸收，不套固定模板；不相关片段必须忽略。\n"
-            "4. 只补充画面质量描述词（光影、材质质感、构图、分辨率），不添加虚假细节。\n"
-            "5. 输出为简洁英文提示词，适合 Stable Diffusion / DALL-E / Midjourney。\n"
-            "6. 末尾用中文括号补充简要中文描述。\n"
+            "1. 输出为设计稿（design specification sheet），不是产品摄影图。包含：正视图、侧视图、顶视图、局部细节。\n"
+            "2. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构。\n"
+            "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
+            "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
+            "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
+            "6. 输出为英文提示词，末尾中文括号补充简要说明。\n"
             "7. 直接输出优化后的提示词，不要多余解释。\n"
-            "8. 用户描述简单时保持简洁，不要脑补成复杂产品（如'设计台灯'不要写成'智能调光无线充电折叠台灯'）。\n"
+            "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
 
         user_message = (
@@ -500,7 +500,7 @@ class ImagePromptOptimizerService:
             user_message += f"\n目标生图模型：{model}\n"
 
         payload = {
-            "model": service_model,
+            "model": self.nodapi_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -510,12 +510,12 @@ class ImagePromptOptimizerService:
         }
 
         headers = {"Content-Type": "application/json"}
-        if service_api_key:
-            headers["Authorization"] = f"Bearer {service_api_key}"
+        if self.nodapi_key:
+            headers["Authorization"] = f"Bearer {self.nodapi_key}"
 
-        async with httpx.AsyncClient(timeout=service_timeout) as client:
+        async with httpx.AsyncClient(timeout=self.nodapi_timeout) as client:
             response = await client.post(
-                f"{service_base_url}/chat/completions",
+                f"{self.nodapi_base}/v1/chat/completions",
                 json=payload,
                 headers=headers,
             )
@@ -524,13 +524,10 @@ class ImagePromptOptimizerService:
 
         content = self._extract_content(data)
         if not content.strip():
-            raise RuntimeError(f"{service_name} 响应为空")
-
-        # 清理可能的前缀标记
+            raise RuntimeError("NodAPI 响应为空")
         content = content.strip()
         content = re.sub(r"^(优化后的提示词|优化提示词|Prompt|优化结果)[:\uff1a]\s*", "", content, flags=re.IGNORECASE)
         content = content.strip().strip('"').strip("'")
-
         return content
 
     @staticmethod

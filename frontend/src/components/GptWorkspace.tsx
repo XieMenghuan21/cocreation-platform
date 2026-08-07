@@ -1007,11 +1007,25 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     setMessages((prev) => [...prev, statusMessage]);
 
     try {
-      const materialText = Object.entries(collectedMaterialsRef.current)
-        .filter(([k, v]) => v && k !== 'raw' && k !== 'referenceAssetId')
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('；');
-      const rawPrompt = [ctx.text, materialText].filter(Boolean).join('。材料补充：');
+      const mats = collectedMaterialsRef.current;
+      const productName = ctx.intent?.projectName || '';
+      const materialLabel = mats.material || '';
+      const dimensionLabel = mats.dimension || '';
+      const styleLabel = mats.style || '';
+      const sceneLabel = mats.scene || '';
+      const featureLabel = mats.feature || '';
+
+      const parts: string[] = [];
+      if (productName) parts.push(`产品：${productName}`);
+      if (ctx.text && ctx.text !== productName) parts.push(ctx.text);
+      if (materialLabel) parts.push(`材质：${materialLabel}`);
+      if (dimensionLabel) parts.push(`尺寸：${dimensionLabel}`);
+      if (styleLabel) parts.push(`风格：${styleLabel}`);
+      if (sceneLabel) parts.push(`使用场景：${sceneLabel}`);
+      if (featureLabel) parts.push(`特殊功能：${featureLabel}`);
+      if (mats.referenceImage) parts.push('用户已提供参考图');
+
+      const rawPrompt = parts.join('；') || ctx.text;
 
       const result = await aggregationWorkbenchService.optimizePrompt({
         prompt: rawPrompt,
