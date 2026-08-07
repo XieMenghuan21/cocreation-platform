@@ -1176,6 +1176,15 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       showMaterialsStep();
       return;
     }
+    if (action === 'project.save') {
+      const name = (data.name as string) || '';
+      const desc = (data.description as string) || '';
+      if (projectCtxRef.current) {
+        projectCtxRef.current.projectName = name || projectCtxRef.current.projectName;
+        projectCtxRef.current.fullRequirement = desc || projectCtxRef.current.fullRequirement;
+      }
+      return;
+    }
     if (action === 'scheme.preview') {
       const card = messages.flatMap((m) => m.cards ?? []).find((c) => c.id === data.cardId);
       if (card?.type === 'design_scheme') {

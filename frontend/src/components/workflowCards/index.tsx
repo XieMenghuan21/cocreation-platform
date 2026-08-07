@@ -98,23 +98,46 @@ const TagPill: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 export const ProjectCreatedCard: React.FC<{
   data: ProjectCreatedCardData;
-  onConfirm: () => void;
+  onConfirm: (name?: string, desc?: string) => void;
   onEdit: () => void;
-}> = ({ data, onConfirm, onEdit }) => (
-  <CardShell icon={<FolderKanban className="size-3.5" />} accent="purple" title="项目已创建">
-    <div className="space-y-1.5">
-      <div className="text-sm font-semibold text-slate-900">{data.name}</div>
-      <p className="text-xs leading-5 text-slate-500">{data.description}</p>
-      <div className="flex items-center gap-1.5 pt-1">
-        <TagPill>{data.projectType || '工业设计'}</TagPill>
+}> = ({ data, onConfirm, onEdit }) => {
+  const [editing, setEditing] = React.useState(false);
+  const [editName, setEditName] = React.useState(data.name);
+  const [editDesc, setEditDesc] = React.useState(data.description);
+
+  if (editing) {
+    return (
+      <CardShell icon={<FolderKanban className="size-3.5" />} accent="purple" title="修改项目">
+        <div className="space-y-2">
+          <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-purple-300" placeholder="项目名称" />
+          <textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} rows={2}
+            className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-purple-300" placeholder="项目描述" />
+        </div>
+        <div className="mt-2 flex items-center gap-1.5">
+          <CardAction onClick={() => { setEditing(false); onConfirm(editName, editDesc); }} primary>保存</CardAction>
+          <CardAction onClick={() => setEditing(false)}>取消</CardAction>
+        </div>
+      </CardShell>
+    );
+  }
+
+  return (
+    <CardShell icon={<FolderKanban className="size-3.5" />} accent="purple" title="项目已创建">
+      <div className="space-y-1.5">
+        <div className="text-sm font-semibold text-slate-900">{data.name}</div>
+        <p className="text-xs leading-5 text-slate-500">{data.description}</p>
+        <div className="flex items-center gap-1.5 pt-1">
+          <TagPill>{data.projectType || '工业设计'}</TagPill>
+        </div>
       </div>
-    </div>
-    <div className="mt-1 flex items-center gap-1.5">
-      <CardAction onClick={onConfirm} primary>确认项目</CardAction>
-      <CardAction onClick={onEdit}>修改</CardAction>
-    </div>
-  </CardShell>
-);
+      <div className="mt-1 flex items-center gap-1.5">
+        <CardAction onClick={() => onConfirm()} primary>确认项目</CardAction>
+        <CardAction onClick={() => { setEditing(true); onEdit(); }}>修改</CardAction>
+      </div>
+    </CardShell>
+  );
+};
 
 /* ── 4.2 需求卡片 ── */
 
@@ -545,7 +568,10 @@ export const WorkflowCardView: React.FC<{
       return (
         <ProjectCreatedCard
           data={data}
-          onConfirm={() => fire('project.confirm', { projectId: data.projectId })}
+          onConfirm={(name, desc) => {
+            if (name || desc) fire('project.save', { name: name || data.name, description: desc || data.description });
+            else fire('project.confirm', { projectId: data.projectId });
+          }}
           onEdit={() => fire('project.edit')}
         />
       );
