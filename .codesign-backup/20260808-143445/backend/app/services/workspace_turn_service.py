@@ -28,7 +28,6 @@ from app.services.agents.engineering_agent import (
 from app.services.agents.model_agent import ModelAgentError, model_agent
 from app.services.agents.quote_agent import quote_agent
 from app.services.agents.render_agent import render_agent
-from app.services.agents.requirement_agent import requirement_agent
 from app.services.cocreation_history_service import cocreation_history_service
 from app.services.intent_service import IntentServiceError, intent_service
 from app.services.workspace_graph_service import workspace_graph_service
@@ -211,49 +210,16 @@ class WorkspaceTurnService:
                 db, conversation, user_id, text, waiting, created, updated
             )
         else:
-            # 已有项目但没有 waiting_user：自然语言仍然先交给 RequirementAgent。
+            # 已有项目但没有等待用户输入：把新文本补进需求，追加 requirement 摘要
             requirement_nodes = [n for n in nodes if n.node_type == "requirement"]
             if requirement_nodes:
                 node = requirement_nodes[-1]
-                previous: dict[str, object] = {}
-                if isinstance(node.input_data, dict):
-                    value = node.input_data.get("requirement")
-                    if isinstance(value, dict):
-                        previous = value
-                analysis = await requirement_agent.analyze(
-                    previous=previous,
-                    latest=text,
-                    intent=(node.input_data or {}).get("intent") if isinstance(node.input_data, dict) else None,
+                merged = f"{node.summary}\n补充：{text}".strip()
+                workspace_graph_service.update_node(
+                    db, node_id=node.id, user_id=user_id, summary=merged
                 )
-                node = workspace_graph_service.update_node(
-                    db,
-                    node_id=node.id,
-                    user_id=user_id,
-                    status="waiting_user",
-                    summary=str(analysis.get("summary") or text),
-                    input_data={**(node.input_data or {}), "requirement": analysis.get("requirement") or {}},
-                    output_data={
-                        **(node.output_data or {}),
-                        "completeness": analysis.get("completeness"),
-                        "criticalUnknown": analysis.get("criticalUnknown"),
-                        "question": analysis.get("question"),
-                        "canProceed": analysis.get("canProceed"),
-                    },
-                    ui_data={
-                        **(node.ui_data or {}),
-                        "completeness": analysis.get("completeness"),
-                        "question": analysis.get("question"),
-                        "canProceed": analysis.get("canProceed"),
-                    },
-                ) or node
                 updated.append(node)
-                assistant_text = (
-                    "我已经把这次修改合并进需求。当前信息足够继续设计；确认需求后，我会重新生成设计方向。"
-                    if analysis.get("canProceed")
-                    else str(analysis.get("question") or "我已经记录修改。再补充一个关键信息后就可以继续设计。")
-                )
-            else:
-                assistant_text = "已记录你的补充信息。"
+            assistant_text = "已记录你的补充信息。需要我继续生成设计方案，还是推进 3D / CAD / 报价？"
 
         assistant = self._save_assistant_message(
             db,
@@ -315,54 +281,29 @@ class WorkspaceTurnService:
         )
         created.append(project_node)
 
-        requirement_analysis = await requirement_agent.analyze(
-            previous={},
-            latest=text,
-            intent=intent,
-        )
         requirement_node = workspace_graph_service.create_node(
             db,
             user_id=user_id,
             conversation_id=conversation.id,
             node_type="requirement",
-            status="waiting_user",
+            status="waiting_user" if intent.get("needsMaterials") else "draft",
             title="需求理解",
-            summary=str(requirement_analysis.get("summary") or intent.get("requirementText") or text),
+            summary=str(intent.get("requirementText") or text),
             project_id=project_id,
             parent_id=project_node.id,
             agent_key="requirement_agent",
-            input_data={
-                "intent": intent,
-                "requirement": requirement_analysis.get("requirement") or {},
-                "assetIds": asset_ids,
-            },
-            output_data={
-                "completeness": requirement_analysis.get("completeness"),
-                "criticalUnknown": requirement_analysis.get("criticalUnknown"),
-                "question": requirement_analysis.get("question"),
-                "canProceed": requirement_analysis.get("canProceed"),
-            },
-            ui_data={
-                "completeness": requirement_analysis.get("completeness"),
-                "question": requirement_analysis.get("question"),
-                "canProceed": requirement_analysis.get("canProceed"),
-            },
+            input_data={"intent": intent},
         )
         created.append(requirement_node)
 
         conversation.project_id = project_id
-        conversation.title = project_name
         db.flush()
 
-        next_text = (
-            "需求已经足够开始设计。确认后我会生成 3 个差异化设计方向。"
-            if requirement_analysis.get("canProceed")
-            else str(requirement_analysis.get("question") or "还需要确认一个关键方向。")
-        )
+        needs = bool(intent.get("needsMaterials"))
         assistant_text = (
             f"已为你建立项目「{project_name}」。\n"
-            f"我对当前需求的理解：{requirement_node.summary}\n"
-            f"{next_text}"
+            f"初步理解：{intent.get('requirementText') or text}\n"
+            f"{'需要补充材质 / 尺寸 / 使用场景等信息来锁定设计方向。' if needs else '信息已足够，可以进入设计方向。'}"
         )
         return created, updated, assistant_text
 
@@ -376,51 +317,17 @@ class WorkspaceTurnService:
         created: list[WorkspaceNode],
         updated: list[WorkspaceNode],
     ) -> str:
-        """把用户补充交给 waiting_user 节点；Requirement 由 RequirementAgent 结构化合并。"""
+        """把用户的补充文本回填到最早的 waiting_user 节点。"""
         node = waiting[0]
-        if node.node_type == "requirement":
-            previous: dict[str, object] = {}
-            if isinstance(node.input_data, dict):
-                value = node.input_data.get("requirement")
-                if isinstance(value, dict):
-                    previous = value
-            analysis = await requirement_agent.analyze(
-                previous=previous,
-                latest=text,
-                intent=(node.input_data or {}).get("intent") if isinstance(node.input_data, dict) else None,
-            )
-            node = workspace_graph_service.update_node(
-                db,
-                node_id=node.id,
-                user_id=user_id,
-                summary=str(analysis.get("summary") or text),
-                input_data={**(node.input_data or {}), "requirement": analysis.get("requirement") or {}},
-                output_data={
-                    **(node.output_data or {}),
-                    "completeness": analysis.get("completeness"),
-                    "criticalUnknown": analysis.get("criticalUnknown"),
-                    "question": analysis.get("question"),
-                    "canProceed": analysis.get("canProceed"),
-                },
-                ui_data={
-                    **(node.ui_data or {}),
-                    "completeness": analysis.get("completeness"),
-                    "question": analysis.get("question"),
-                    "canProceed": analysis.get("canProceed"),
-                },
-            ) or node
-            updated.append(node)
-            if analysis.get("canProceed"):
-                return "需求已经整理到可以开始设计的程度。你可以直接确认，我会生成 3 个设计方向；也可以继续补充。"
-            return str(analysis.get("question") or "我已经记录。再补充一个最关键的信息后就可以开始设计。")
-
         prev_summary = node.summary
         merged = f"{prev_summary}\n补充：{text}".strip()
         node = workspace_graph_service.update_node(
             db, node_id=node.id, user_id=user_id, summary=merged
         ) or node
         updated.append(node)
-        return "已记录。"
+        return (
+            "已补充到需求。还需要更多信息，还是直接开始生成设计方向？"
+        )
 
     async def _handle_action(
         self,

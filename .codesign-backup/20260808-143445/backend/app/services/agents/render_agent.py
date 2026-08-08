@@ -49,7 +49,6 @@ def build_render_request(
             generatePlanLine=False,
             generateDrawing=True,
             generateRender=True,
-            enhanceImage=False,
         ),
     )
 
@@ -97,44 +96,10 @@ def sync_node_from_task(db: Session, task_id: str) -> WorkspaceNode | None:
 
     image_url = _pick_output_image(outputs)
     new_output: dict[str, object] = dict(node.output_data)
-
-    # renderPng/enhancedImage 是 Graph 渲染主产物，也提升为 previewUrl 供资源页/预览通用。
-    if image_url is None:
-        for key in ("renderPng", "enhancedImage"):
-            value = outputs.get(key)
-            if isinstance(value, str) and value:
-                image_url = value
-                break
-
-    # WorkspaceNode 是 Chat / ResourceTree / Preview 的投影源。
-    # 不能只复制一张预览图，否则 3D/CAD/工程包在 Graph 模式下会“任务完成但没有可预览产物”。
-    # 保存完整工作流 outputs，同时把常用字段提升到顶层以兼容现有前端。
-    if outputs:
-        new_output["workflowOutputs"] = outputs
-        passthrough_keys = (
-            "renderPng", "enhancedImage", "explosionPng", "drawingSvg",
-            "modelStl", "modelStep", "modelGlb", "modelDownloadUrl",
-            "planLineSvg", "generatedImageUrls", "generatedImages",
-            "modelStlAssetId", "modelStepAssetId", "drawingAssetId",
-        )
-        for key in passthrough_keys:
-            value = outputs.get(key)
-            if value not in (None, "", [], {}):
-                new_output[key] = value
-
-    if image_url:
+    if image_url and not new_output.get("previewUrl"):
         new_output["previewUrl"] = image_url
         new_output["renderImageUrl"] = image_url
         new_output["imageUrl"] = image_url
-
-    model_url = outputs.get("modelStl") or outputs.get("modelDownloadUrl") or outputs.get("modelGlb")
-    if isinstance(model_url, str) and model_url:
-        new_output["modelUrl"] = model_url
-
-    drawing_url = outputs.get("drawingSvg") or outputs.get("planLineSvg")
-    if isinstance(drawing_url, str) and drawing_url:
-        new_output["drawingUrl"] = drawing_url
-
     if task.error_message and new_status == "failed":
         new_output["errorMessage"] = task.error_message
     updates["output_data"] = new_output
@@ -148,7 +113,7 @@ def sync_node_from_task(db: Session, task_id: str) -> WorkspaceNode | None:
         from app.services.agents.next_action_agent import next_action_agent
 
         next_action_agent.create_next_action(
-            db=db,
+            db,
             user_id=node.user_id,
             conversation_id=node.conversation_id,
             project_id=node.project_id,

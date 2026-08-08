@@ -40,7 +40,6 @@ import type { VersionSnapshot } from './CoCreationAgentWorkspace.types';
 import { conversationService } from '../services/conversationService';
 import { assetService, assetDownloadUrl } from '../services/assetService';
 import { aggregationWorkbenchService } from '../services/aggregationWorkbenchService';
-import { workspaceMirrorService } from '../services/workspaceMirrorService';
 
 interface ChatMessage {
   id: string;
@@ -264,12 +263,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       const conversation = await conversationService.get(cid);
       conversationIdRef.current = cid;
       setConversationId(cid);
+      projectCtxRef.current = null;
       pendingWorkflowRef.current = null;
       collectedMaterialsRef.current = {};
       setPendingAttachments([]);
       setCollectedMaterials({});
       setShowPreview(false);
-
       const built: ChatMessage[] = conversation.messages.map((message) => {
         const cardData = message.cardData ?? {};
         const outputs = (cardData.outputs as CadAiTaskStatus['outputs'] | undefined) ?? undefined;
@@ -287,49 +286,18 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           cards,
         };
       });
-      if (built.length > 0 && !sendingRef.current) setMessages(built);
-
-      const projectCard = built
-        .flatMap((message) => message.cards ?? [])
-        .find((card) => card.type === 'project_created');
-      const projectCardData = projectCard?.data as { projectId?: string; name?: string } | undefined;
-      const latestProjectMessage = [...built].reverse().find((message) => Boolean(message.projectId));
-      const firstUser = built.find((message) => message.role === 'user');
-      const lastUser = [...built].reverse().find((message) => message.role === 'user');
-      const restoredProjectId = conversation.projectId
-        || projectCardData?.projectId
-        || latestProjectMessage?.projectId
-        || projectId
-        || null;
-
-      if (restoredProjectId) {
-        const restoredProjectName = projectCardData?.name || projectName || conversation.title || restoredProjectId;
-        const anchorMessage = built.find((message) =>
-          (message.cards ?? []).some((card) => card.type === 'project_created'),
-        ) || latestProjectMessage;
-        projectCtxRef.current = {
-          messageId: anchorMessage?.id || nextId(),
-          projectId: restoredProjectId,
-          projectName: restoredProjectName,
-          intent: null,
-          fullRequirement: firstUser?.text || lastUser?.text || '',
-        };
-        projectConfirmedRef.current = true;
-        if (!conversation.projectId) {
-          void conversationService.update(cid, {
-            projectId: restoredProjectId,
-            title: restoredProjectName,
-          }).catch(() => undefined);
-        }
-        onProjectLinked?.(restoredProjectId, restoredProjectName);
-      } else {
-        projectCtxRef.current = null;
-        projectConfirmedRef.current = false;
+      if (built.length > 0 && !sendingRef.current) {
+        setMessages(built);
+      }
+      const projectCtx = projectCtxRef.current;
+      const lastUser = [...built].reverse().find((m) => m.role === 'user');
+      if (lastUser && projectCtx) {
+        // 恢复后继续在当前项目上下文内收集材料
       }
     } catch {
       // 会话加载失败不阻塞
     }
-  }, [onProjectLinked, projectId, projectName]);
+  }, []);
 
   useEffect(() => {
     if (!initialConversationId) return;
@@ -704,23 +672,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     projectConfirmedRef.current = false;
 
     void ensureConversation().then((cid) => {
-      if (!cid) return;
-      void conversationService.update(cid, {
-        projectId: project.id,
-        title: project.name,
-      }).catch(() => undefined);
-      onProjectLinked?.(project.id, project.name);
-      void workspaceMirrorService.safeMirror(cid, {
-        sourceKey: `legacy-project:${project.id}`,
-        type: 'project',
-        status: 'completed',
-        title: project.name,
-        summary: project.description || intent?.requirementText || text,
-        projectId: project.id,
-        inputData: { requirement: text, intent },
-        uiData: { projection: 'project_card' },
-      });
-      void persistMessage('assistant', confirmed);
+      if (cid) void persistMessage('assistant', confirmed);
     });
   };
 
@@ -760,7 +712,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         type: 'next_step',
         data: {
           current: 'ready_to_generate',
-          recommendations: [{ label: '开始生成', agent: 'confirm', icon: '✅', action: 'confirm' }],
+          recommendations: [{ label: '开始生成', agent: 'confirm', icon: '✅', action: 'quote' }],
         },
       });
     }
@@ -855,13 +807,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         materials: nextCollected.material ? [nextCollected.material] : [],
         constraints: nextCollected.other ? [nextCollected.other] : [],
         completeness: Math.min(100, 40 + answeredCount * 12),
-        missing: [
-          !nextCollected.dimension ? '尺寸' : null,
-          !nextCollected.material ? '材质' : null,
-          !nextCollected.budget ? '预算' : null,
-          !nextCollected.scene ? '场景' : null,
-          !nextCollected.style ? '风格' : null,
-        ].filter((item): item is string => Boolean(item)),
+        missing: ['尺寸', '材质', '预算', '场景', '风格'].filter((k) => !nextCollected[k] && k !== '尺寸' ? (k === '尺寸' ? !nextCollected.dimension : true) : false),
       },
     };
 
@@ -895,7 +841,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           data: {
             current: 'materials_collected',
             recommendations: [
-              { label: '确认需求，开始生成', agent: 'confirm', icon: '✅', action: 'confirm' },
+              { label: '确认需求，开始生成', agent: 'confirm', icon: '✅', action: 'quote' },
             ],
           },
         },
@@ -922,17 +868,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       intent: ctx.intent,
       projectId: ctx.projectId,
     };
-    void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-      sourceKey: `legacy-requirement:${ctx.projectId}`,
-      type: 'requirement',
-      status: 'completed',
-      title: `${ctx.projectName} · 需求定义`,
-      summary: fullRequirementText,
-      projectId: ctx.projectId,
-      parentSourceKey: `legacy-project:${ctx.projectId}`,
-      inputData: { collected: nextCollected },
-      uiData: { projection: 'requirement_card' },
-    });
     void persistMessage('assistant', confirmed);
   };
 
@@ -1006,20 +941,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       setMessages((prev) => prev.map((m) => (m.id === statusMessage.id ? done : m)));
       applyMessageToPreview(done);
       if (done.outputs) setShowPreview(true);
-      if (done.projectId && onProjectLinked) onProjectLinked(done.projectId, projectCtxRef.current?.projectName || projectName || done.projectId);
-      void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-        sourceKey: `legacy-render:${current.taskId || statusMessage.id}`,
-        type: 'render',
-        status: 'completed',
-        title: `${projectCtxRef.current?.projectName || projectName || '设计项目'} · 设计结果`,
-        summary: done.text,
-        projectId: done.projectId || projectIdValue || null,
-        taskId: current.taskId,
-        versionId: current.versionId,
-        parentSourceKey: `legacy-project:${done.projectId || projectIdValue}`,
-        outputData: { ...outputs },
-        uiData: { projection: 'design_scheme_card' },
-      });
+      if (done.projectId && onProjectLinked) onProjectLinked(done.projectId, done.projectId);
       void persistMessage('assistant', done);
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
@@ -1174,26 +1096,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         cards: resultCards,
       });
       void persistMessage('assistant', { id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId, outputs, cards: resultCards } as ChatMessage);
-      const mirrorType = actionKind === '3d'
-        ? 'model_3d'
-        : actionKind === 'cad'
-          ? 'cad'
-          : actionKind === 'quote'
-            ? 'quote'
-            : 'render';
-      void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-        sourceKey: `legacy-${mirrorType}:${current.taskId || statusMessage.id}`,
-        type: mirrorType,
-        status: 'completed',
-        title: actionKind === '3d' ? '3D 模型' : actionKind === 'cad' ? 'CAD 图纸' : actionKind === 'quote' ? '方案报价' : '宣传图',
-        summary: resultText,
-        projectId: current.projectId || projectIdValue || null,
-        taskId: current.taskId,
-        versionId: current.versionId,
-        parentSourceKey: `legacy-project:${current.projectId || projectIdValue}`,
-        outputData: { workflowOutputs: { ...outputs }, cards: resultCards },
-        uiData: { projection: actionKind === 'quote' ? 'quote_card' : 'result_card' },
-      });
       if (outputs) {
         applyMessageToPreview({ id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', outputs } as ChatMessage);
         setShowPreview(true);
@@ -1349,21 +1251,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
             patchMessage(statusMsg.id, {
               status: 'completed',
               text: `工程设计包已生成。\n文件名：${result.filename || 'package.zip'}\n[下载](${result.packageDownloadUrl || '#'})`,
-            });
-            void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-              sourceKey: `legacy-package:${taskId}`,
-              type: 'engineering_package',
-              status: 'completed',
-              title: '工程设计包',
-              summary: `工程设计包已生成：${result.filename || 'package.zip'}`,
-              projectId: projectCtxRef.current?.projectId || projectId || null,
-              taskId,
-              parentSourceKey: `legacy-project:${projectCtxRef.current?.projectId || projectId}`,
-              outputData: {
-                filename: result.filename || 'package.zip',
-                packageDownloadUrl: result.packageDownloadUrl || '',
-              },
-              uiData: { projection: 'package_card' },
             });
             void persistMessage('assistant', { id: statusMsg.id, role: 'assistant', text: `工程设计包已生成：${result.filename || 'package.zip'}`, status: 'completed' } as ChatMessage);
           } catch (error) {

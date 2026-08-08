@@ -1,5 +1,5 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   runLogout,
   sessionService,
@@ -11,17 +11,12 @@ import {
   isTrustedParentMessage,
   sessionBootstrap,
 } from './services/sessionBootstrap';
-import { WorkspaceNavigation } from './components/workspace/WorkspaceNavigation';
-import { WorkspaceResourceView } from './components/workspace/WorkspaceResourceView';
-import {
-  normalizeWorkspacePrimaryView,
-  type WorkspacePrimaryView,
-} from './components/workspace/workspaceResourceTypes';
+import type { WorkspaceResourceSection } from './components/workspace/WorkspaceResourceCenter';
 
 const CoCreationLogin = lazy(() => import('./components/CoCreationLogin').then((module) => ({ default: module.CoCreationLogin })));
 const LandingPage = lazy(() => import('./components/LandingPage').then((module) => ({ default: module.LandingPage })));
 const GptWorkspace = lazy(() => import('./components/GptWorkspace').then((module) => ({ default: module.GptWorkspace })));
-const WorkspaceShell = lazy(() => import('./components/workspace/WorkspaceShell').then((module) => ({ default: module.WorkspaceShell })));
+const WorkspaceResourceCenter = lazy(() => import('./components/workspace/WorkspaceResourceCenter').then((module) => ({ default: module.WorkspaceResourceCenter })));
 
 interface AuthState {
   user: SessionUser | null;
@@ -89,18 +84,14 @@ const LoginRoute: React.FC<{
 };
 
 /**
- * AI 共创设计工作台：产品层只有一个 Workspace。
+ * 产品路由收口：
+ * - /                       极简首页
+ * - /login                  登录
+ * - /workspace              唯一核心工作台
+ * - /workspace/:conversationId  历史对话兼容入口，仍进入 GptWorkspace
+ * - /projects /assets /quotes   仅做旧链接兼容，重定向回工作台资源中心
  *
- * /workspace                         默认 Conversation
- * /workspace/:conversationId         恢复 Conversation（仍是旧稳定 GptWorkspace 主链）
- * /workspace?view=projects           Workspace 内项目档案馆
- * /workspace?view=files              Workspace 内文件中心
- * /workspace?view=assets             Workspace 内 AI 资产中心
- * /workspace?view=versions           Workspace 内版本中心
- * /workspace?view=quotes             Workspace 内报价中心
- * /workspace?graph=1                 仅保留给 Workspace Graph 实验，不接管生产入口
- *
- * 旧 /projects /assets /quotes 仅做兼容跳转，不再作为产品一级页面。
+ * Workspace Graph 实验代码仍可保留在仓库中，但不再接管生产入口。
  */
 export const CoCreationStandaloneApp: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>({
@@ -149,6 +140,7 @@ export const CoCreationStandaloneApp: React.FC = () => {
         );
       }
     };
+
     if (isIframe && configuredSsoParentOrigin) {
       window.addEventListener('message', handleMessage);
       window.parent.postMessage(
@@ -156,24 +148,27 @@ export const CoCreationStandaloneApp: React.FC = () => {
         configuredSsoParentOrigin,
       );
     }
+
     return () => {
       unsubscribeBootstrap();
       window.removeEventListener('message', handleMessage);
     };
-  }, [handleLoginSuccess, isIframe]);
+  }, [handleLoginSuccess, handleSessionRestored, isIframe]);
 
   const handleLogout = useCallback(async (): Promise<void> => {
     setLogoutError(null);
     const error = await runLogout(
       () => sessionService.logout(),
-      () => setAuth({ user: null, isLoading: false, isIframe: false }),
+      () => {
+        setAuth({ user: null, isLoading: false, isIframe: false });
+      },
     );
     setLogoutError(error);
   }, []);
 
   const userLabel = auth.user?.displayName || auth.user?.username || '';
 
-  const protectedShell = (
+  const protectedWorkspace = (
     <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
       <StandaloneShell
         isIframe={auth.isIframe}
@@ -197,19 +192,39 @@ export const CoCreationStandaloneApp: React.FC = () => {
         )}
       />
       <Route path="/login" element={<LoginRoute user={auth.user} onLogin={handleLoginSuccess} />} />
-      <Route path="/workspace/:conversationId" element={protectedShell} />
-      <Route path="/workspace" element={protectedShell} />
-
-      {/* 旧地址只做兼容，不再进入独立业务页。 */}
-      <Route path="/projects" element={<Navigate to="/workspace?view=projects" replace />} />
-      <Route path="/assets" element={<Navigate to="/workspace?view=assets" replace />} />
-      <Route path="/quotes" element={<Navigate to="/workspace?view=quotes" replace />} />
-      <Route path="/files" element={<Navigate to="/workspace?view=files" replace />} />
-      <Route path="/versions" element={<Navigate to="/workspace?view=versions" replace />} />
+      <Route path="/workspace" element={protectedWorkspace} />
+      <Route path="/workspace/:conversationId" element={protectedWorkspace} />
+      <Route
+        path="/projects"
+        element={(
+          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
+            <Navigate to="/workspace?resource=projects" replace />
+          </ProtectedRoute>
+        )}
+      />
+      <Route
+        path="/assets"
+        element={(
+          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
+            <Navigate to="/workspace?resource=assets" replace />
+          </ProtectedRoute>
+        )}
+      />
+      <Route
+        path="/quotes"
+        element={(
+          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
+            <Navigate to="/workspace?resource=quotes" replace />
+          </ProtectedRoute>
+        )}
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };
+
+const isResourceSection = (value: string | null): value is WorkspaceResourceSection =>
+  value === 'projects' || value === 'files' || value === 'assets' || value === 'versions' || value === 'quotes';
 
 const StandaloneShell: React.FC<{
   isIframe: boolean;
@@ -218,94 +233,92 @@ const StandaloneShell: React.FC<{
   logoutError: string | null;
 }> = ({ isIframe, userLabel, onLogout, logoutError }) => {
   const navigate = useNavigate();
-  const location = useLocation();
+  const params = useParams<{ conversationId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [newChatKey, setNewChatKey] = useState(0);
+  const [resourceRefreshKey, setResourceRefreshKey] = useState(0);
 
-  const pathConversationId = (location.pathname.match(/^\/workspace\/([^/]+)/) || [])[1] || null;
-  const activeView = normalizeWorkspacePrimaryView(searchParams.get('view'));
-  const graphDefault = import.meta.env.VITE_WORKSPACE_GRAPH_DEFAULT === '1';
-  const isGraphMode = activeView === 'chat' && (
-    searchParams.get('graph') === '1'
-    || (graphDefault && searchParams.get('legacy') !== '1')
-  );
   const projectId = searchParams.get('project');
   const projectName = searchParams.get('name');
   const initialPrompt = searchParams.get('prompt');
   const initialPreview = searchParams.get('preview');
-  const initialConversationId = searchParams.get('cid') || pathConversationId;
-  const resourceProjectId = searchParams.get('archiveProject');
-
-  const graphConversationId = useMemo(
-    () => (isGraphMode ? pathConversationId ?? undefined : undefined),
-    [isGraphMode, pathConversationId],
-  );
-
-  const setWorkspaceView = useCallback((next: WorkspacePrimaryView) => {
-    const params = new URLSearchParams(searchParams);
-    if (next === 'chat') {
-      params.delete('view');
-      params.delete('archiveProject');
-    } else {
-      params.set('view', next);
-      if (next !== 'projects') params.delete('archiveProject');
-    }
-    // 保留 graph=1：用户在 Graph 对话与资源页之间切换时不能偷偷换回另一套工作流。
-    setSearchParams(params, { replace: false });
-  }, [searchParams, setSearchParams]);
+  const queryConversationId = searchParams.get('cid');
+  const initialConversationId = queryConversationId || params.conversationId || null;
+  const resourceQuery = searchParams.get('resource');
+  const activeResource: WorkspaceResourceSection = isResourceSection(resourceQuery) ? resourceQuery : 'projects';
 
   const handleNewChat = useCallback(() => {
-    setNewChatKey((prev) => prev + 1);
-    navigate('/workspace', { replace: false });
+    setNewChatKey((previous) => previous + 1);
+    setResourceRefreshKey((previous) => previous + 1);
+    navigate('/workspace', { replace: true });
   }, [navigate]);
 
   useEffect(() => {
     if (!initialPrompt) return;
-    const params = new URLSearchParams(searchParams);
-    params.delete('prompt');
-    setSearchParams(params, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
   }, [initialPrompt, searchParams, setSearchParams]);
 
   const handleProjectLinked = useCallback((linkedProjectId: string, linkedProjectName: string) => {
-    const params = new URLSearchParams(searchParams);
-    params.set('project', linkedProjectId);
-    if (linkedProjectName) params.set('name', linkedProjectName);
-    params.delete('prompt');
-    params.delete('view');
-    params.delete('archiveProject');
-    setSearchParams(params, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.set('project', linkedProjectId);
+    if (linkedProjectName) next.set('name', linkedProjectName);
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
+    setResourceRefreshKey((previous) => previous + 1);
   }, [searchParams, setSearchParams]);
 
-  const handleOpenConversation = useCallback((conversationId: string, title: string) => {
-    const params = new URLSearchParams();
-    if (title) params.set('name', title);
-    navigate(`/workspace/${encodeURIComponent(conversationId)}${params.toString() ? `?${params.toString()}` : ''}`);
+  const handleResourceChange = useCallback((section: WorkspaceResourceSection) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('resource', section);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleOpenProject = useCallback((pid: string, name: string, imageUrl: string | null) => {
+    // Switching projects must remount the legacy GptWorkspace so old messages do not
+    // leak into the newly selected project. This is a UI reset only; the existing
+    // project/history/workflow services remain untouched.
+    setNewChatKey((previous) => previous + 1);
+    const next = new URLSearchParams();
+    next.set('project', pid);
+    next.set('name', name);
+    next.set('resource', 'projects');
+    if (imageUrl) next.set('preview', imageUrl);
+    navigate(`/workspace?${next.toString()}`);
   }, [navigate]);
 
-  const handleOpenResourceProject = useCallback((pid: string) => {
-    const params = new URLSearchParams(searchParams);
-    params.set('view', 'projects');
-    params.set('archiveProject', pid);
-    setSearchParams(params, { replace: false });
-  }, [searchParams, setSearchParams]);
+  const handleOpenConversation = useCallback((conversationId: string, title: string) => {
+    const next = new URLSearchParams();
+    next.set('cid', conversationId);
+    next.set('name', title);
+    navigate(`/workspace?${next.toString()}`);
+  }, [navigate]);
 
-  const handleClearResourceProject = useCallback(() => {
-    const params = new URLSearchParams(searchParams);
-    params.set('view', 'projects');
-    params.delete('archiveProject');
-    setSearchParams(params, { replace: true });
+  const handlePreviewUrl = useCallback((url: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('preview', url);
+    setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f5f5f4]">
-      <WorkspaceNavigation
-        activeView={isGraphMode ? 'chat' : activeView}
-        userLabel={userLabel}
-        onSelectView={setWorkspaceView}
-        onNewChat={handleNewChat}
-        onOpenConversation={handleOpenConversation}
-        onLogout={() => void onLogout()}
-      />
+      <Suspense fallback={null}>
+        <WorkspaceResourceCenter
+          userLabel={userLabel}
+          activeProjectId={projectId}
+          activeConversationId={initialConversationId}
+          activeSection={activeResource}
+          initiallyExpanded={Boolean(resourceQuery)}
+          refreshKey={resourceRefreshKey}
+          onSectionChange={handleResourceChange}
+          onNewChat={handleNewChat}
+          onOpenProject={handleOpenProject}
+          onOpenConversation={handleOpenConversation}
+          onPreviewUrl={handlePreviewUrl}
+          onLogout={() => void onLogout()}
+        />
+      </Suspense>
 
       <main className="flex h-full min-w-0 flex-1 flex-col">
         {logoutError ? (
@@ -321,57 +334,23 @@ const StandaloneShell: React.FC<{
           </div>
         ) : null}
 
-        <div className="relative flex h-full min-h-0 flex-1 overflow-hidden">
+        <div className="flex h-full min-h-0 flex-1">
           <Suspense fallback={<SurfaceLoader label="正在加载工作台" />}>
-            {isGraphMode ? (
-              <WorkspaceShell
-                key={`graph-${newChatKey}`}
-                conversationId={graphConversationId}
-                initialPrompt={initialPrompt}
-                onConversationChanged={(cid, title) => {
-                  const params = new URLSearchParams({ graph: '1' });
-                  if (title) params.set('name', title);
-                  navigate(`/workspace/${cid}?${params.toString()}`, { replace: true });
-                }}
-                onNewChat={() => {
-                  setNewChatKey((prev) => prev + 1);
-                  navigate('/workspace?graph=1', { replace: true });
-                }}
-                externalResourceCenter
-              />
-            ) : (
-              <>
-                {/* GptWorkspace 始终保持挂载。切换资源页时只隐藏，避免正在运行的轮询/生成被卸载。 */}
-                <div className={activeView === 'chat' ? 'flex h-full min-w-0 flex-1' : 'hidden'}>
-                  <GptWorkspace
-                    key={`chat-${newChatKey}`}
-                    initialPrompt={initialPrompt}
-                    projectId={projectId}
-                    projectName={projectName}
-                    initialPreview={initialPreview}
-                    initialConversationId={initialConversationId}
-                    onProjectLinked={handleProjectLinked}
-                    onNavigateHome={() => navigate('/')}
-                    externalResourceCenter
-                  />
-                </div>
-
-                {activeView !== 'chat' ? (
-                  <WorkspaceResourceView
-                    view={activeView}
-                    selectedProjectId={resourceProjectId}
-                    onBackToConversation={() => setWorkspaceView('chat')}
-                    onOpenProject={(project) => handleOpenResourceProject(project.id)}
-                    onClearProject={handleClearResourceProject}
-                    onOpenConversation={handleOpenConversation}
-                  />
-                ) : null}
-              </>
-            )}
+            <GptWorkspace
+              key={`${newChatKey}-${initialConversationId || 'new'}`}
+              initialPrompt={initialPrompt}
+              projectId={projectId}
+              projectName={projectName}
+              initialPreview={initialPreview}
+              initialConversationId={initialConversationId}
+              onProjectLinked={handleProjectLinked}
+              externalResourceCenter
+              onNavigateHome={() => navigate('/')}
+            />
           </Suspense>
         </div>
 
-        {!isGraphMode && activeView === 'chat' && projectId ? (
+        {projectId ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-2">
             <div className="min-w-0 flex items-center gap-2">
               <span className="truncate text-xs font-medium text-slate-600">

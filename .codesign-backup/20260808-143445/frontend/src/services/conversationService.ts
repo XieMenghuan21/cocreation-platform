@@ -1,4 +1,4 @@
-import { del, get, post, request } from './httpRequest';
+import { get, post, del, type ApiResponse } from './httpRequest';
 
 export interface ConversationMessage {
   id: number;
@@ -20,11 +20,6 @@ export interface Conversation {
 export interface CreateConversationPayload {
   projectId?: string | null;
   title?: string;
-}
-
-export interface UpdateConversationPayload {
-  projectId?: string | null;
-  title?: string | null;
 }
 
 export interface AppendMessagePayload {
@@ -57,28 +52,11 @@ export const conversationService = {
 
   async get(conversationId: string): Promise<Conversation> {
     const response = await get<{ conversation: Conversation }>(
-      `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
+      `/api/v1/conversations/${conversationId}`,
       undefined,
       { showError: false },
     );
     return response.data.conversation;
-  },
-
-  async update(
-    conversationId: string,
-    payload: UpdateConversationPayload,
-  ): Promise<Conversation> {
-    const response = await request<Conversation>({
-      url: `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
-      method: 'PATCH',
-      data: {
-        projectId: payload.projectId,
-        title: payload.title,
-      },
-      showError: false,
-      cancelDuplicate: false,
-    });
-    return response.data;
   },
 
   async append(
@@ -86,7 +64,7 @@ export const conversationService = {
     payload: AppendMessagePayload,
   ): Promise<ConversationMessage> {
     const response = await post<ConversationMessage>(
-      `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+      `/api/v1/conversations/${conversationId}/messages`,
       {
         role: payload.role,
         text: payload.text,
@@ -98,7 +76,7 @@ export const conversationService = {
   },
 
   async remove(conversationId: string): Promise<void> {
-    await del(`/api/v1/conversations/${encodeURIComponent(conversationId)}`, undefined, {
+    await del(`/api/v1/conversations/${conversationId}`, undefined, {
       showError: false,
     });
   },

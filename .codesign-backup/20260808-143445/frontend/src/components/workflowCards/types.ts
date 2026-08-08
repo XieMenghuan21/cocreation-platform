@@ -21,6 +21,7 @@ export interface MaterialsRequestCardData {
   fields: MaterialField[];
   collected: Record<string, string>;
 }
+
 export interface ProjectCreatedCardData {
   name: string;
   description: string;
@@ -39,6 +40,7 @@ export interface RequirementCardData {
   completeness: number;
   missing: string[];
 }
+
 export interface DesignSchemeCardData {
   schemeId: string;
   name: string;
@@ -58,6 +60,7 @@ export interface QuoteCardData {
   totalInternal: number;
   totalCustomer: number;
 }
+
 export interface StatusCardData {
   agent: string;
   task: string;
@@ -76,9 +79,9 @@ export interface NextStepRecommendation {
   label: string;
   agent: string;
   icon: string;
-  /** confirm 只表示确认当前业务节点，不应再伪装成 quote。 */
-  action: 'confirm' | 'render' | '3d' | 'cad' | 'quote' | 'package';
+  action: 'render' | '3d' | 'cad' | 'quote' | 'package';
 }
+
 export interface NextStepCardData {
   current: string;
   recommendations: NextStepRecommendation[];
@@ -89,6 +92,7 @@ export interface WorkflowCard {
   type: CardType;
   data: ProjectCreatedCardData | RequirementCardData | DesignSchemeCardData | QuoteCardData | StatusCardData | NextStepCardData | MaterialsRequestCardData | PromptCardData;
 }
+
 export type CardDataByType = {
   project_created: ProjectCreatedCardData;
   requirement: RequirementCardData;

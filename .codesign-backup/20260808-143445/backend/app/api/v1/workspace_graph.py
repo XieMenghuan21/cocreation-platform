@@ -4,18 +4,14 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_auth
 from app.core.identity import auth_user_id
 from app.db.session import get_db
 from app.models.conversation import Conversation
-from app.models.workspace_node import WorkspaceNode
 from app.schemas.workspace_graph import TurnRequest, TurnResponse, WorkspaceSnapshotData
-from app.schemas.workspace_mirror import WorkspaceMirrorRequest
 from app.services.workspace_graph_service import workspace_graph_service
-from app.services.workspace_mirror_service import workspace_mirror_service
 from app.services.workspace_turn_service import WorkspaceTurnError, workspace_turn_service
 from app.services.agents.render_agent import sync_node_from_task
 from app.utils.response import error_response, success_response
@@ -76,66 +72,6 @@ async def append_turn(
     return success_response(
         data=result.model_dump(by_alias=True),
         message="本轮已处理",
-    )
-
-
-@router.post("/{conversation_id}/workspace/mirror", response_model=dict, summary="镜像稳定工作流节点")
-def mirror_workspace_node(
-    conversation_id: UUID,
-    request: WorkspaceMirrorRequest,
-    auth_user: dict[str, object] = Depends(require_auth),
-    db: Session = Depends(get_db),
-) -> dict[str, object]:
-    """把稳定 GptWorkspace 已完成的业务结果非阻塞镜像到 Workspace Graph。
-
-    该接口不调度 Agent、不创建任务，只做幂等 Node upsert。
-    """
-    user_id = auth_user_id(auth_user)
-    conversation = db.get(Conversation, conversation_id)
-    if conversation is None or conversation.user_id != user_id:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    node = workspace_mirror_service.mirror(
-        db,
-        user_id=user_id,
-        conversation_id=conversation_id,
-        request=request,
-    )
-    if node is None:
-        raise HTTPException(status_code=500, detail="Workspace Node 镜像失败")
-    db.commit()
-    db.refresh(node)
-    return success_response(
-        data=workspace_graph_service.to_data(node).model_dump(by_alias=True),
-        message="Workspace Node 已镜像",
-    )
-
-
-@router.get("/workspace-nodes", response_model=dict, summary="查询当前用户的 Workspace 节点")
-def list_workspace_nodes(
-    node_type: str | None = None,
-    project_id: str | None = None,
-    auth_user: dict[str, object] = Depends(require_auth),
-    db: Session = Depends(get_db),
-) -> dict[str, object]:
-    """资源中心的只读查询入口。
-
-    这里不调度 Agent、不改变工作流，只把 Conversation 已经生成的结构化节点
-    投影给项目/版本/报价等资源视图。
-    """
-    user_id = auth_user_id(auth_user)
-    stmt = select(WorkspaceNode).where(WorkspaceNode.user_id == user_id)
-    if node_type:
-        stmt = stmt.where(WorkspaceNode.node_type == node_type)
-    if project_id:
-        stmt = stmt.where(WorkspaceNode.project_id == project_id)
-    stmt = stmt.order_by(WorkspaceNode.updated_at.desc(), WorkspaceNode.created_at.desc())
-    nodes = list(db.scalars(stmt).all())
-    return success_response(
-        data={
-            "nodes": [workspace_graph_service.to_data(node).model_dump(by_alias=True) for node in nodes]
-        },
-        message="Workspace 节点读取成功",
     )
 
 
