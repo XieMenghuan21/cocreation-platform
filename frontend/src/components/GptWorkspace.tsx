@@ -86,6 +86,7 @@ interface GptWorkspaceProps {
   initialConversationId?: string | null;
   onProjectLinked?: (projectId: string, projectName: string) => void;
   onNavigateHome?: () => void;
+  externalResourceCenter?: boolean;
 }
 
 const EMPTY_OUTPUTS: CadAiTaskStatus['outputs'] = {};
@@ -103,6 +104,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   initialConversationId,
   onProjectLinked,
   onNavigateHome,
+  externalResourceCenter,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -1343,14 +1345,16 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           </span>
         ) : null}
         <div className="flex-1" />
-        <button
-          type="button"
-          onClick={() => { setShowResource((prev) => !prev); void loadResourceData(); }}
-          className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-50"
-        >
-          {showResource ? <PanelLeft className="size-3.5" /> : <PanelLeft className="size-3.5" />}
-          资源
-        </button>
+        {!externalResourceCenter ? (
+          <button
+            type="button"
+            onClick={() => { setShowResource((prev) => !prev); void loadResourceData(); }}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-50"
+          >
+            <PanelLeft className="size-3.5" />
+            资源
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => setShowPreview((prev) => !prev)}
@@ -1641,8 +1645,8 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   return (
     <div ref={bodyRef} className="flex h-full min-w-0 flex-1">
       <ResizablePanel
-        left={showResource ? resourcePanel : null}
-        leftWidth={showResource ? 220 : 0}
+        left={showResource && !externalResourceCenter ? resourcePanel : null}
+        leftWidth={showResource && !externalResourceCenter ? 220 : 0}
         onLeftWidthChange={() => {}}
         center={chatPanel}
         right={showPreview ? previewPanel : null}

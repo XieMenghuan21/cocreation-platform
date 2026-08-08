@@ -1,5 +1,5 @@
-import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   runLogout,
   sessionService,
@@ -11,15 +11,12 @@ import {
   isTrustedParentMessage,
   sessionBootstrap,
 } from './services/sessionBootstrap';
-import type { GptView } from './components/GptSidebar';
+import type { WorkspaceResourceSection } from './components/workspace/WorkspaceResourceCenter';
 
 const CoCreationLogin = lazy(() => import('./components/CoCreationLogin').then((module) => ({ default: module.CoCreationLogin })));
 const LandingPage = lazy(() => import('./components/LandingPage').then((module) => ({ default: module.LandingPage })));
-const CoCreationHistoryPage = lazy(() => import('./components/CoCreationHistoryPage').then((module) => ({ default: module.CoCreationHistoryPage })));
-const GptSidebar = lazy(() => import('./components/GptSidebar').then((module) => ({ default: module.GptSidebar })));
 const GptWorkspace = lazy(() => import('./components/GptWorkspace').then((module) => ({ default: module.GptWorkspace })));
-const QuotesPage = lazy(() => import('./components/QuotesPage').then((module) => ({ default: module.QuotesPage })));
-const WorkspaceShell = lazy(() => import('./components/workspace/WorkspaceShell').then((module) => ({ default: module.WorkspaceShell })));
+const WorkspaceResourceCenter = lazy(() => import('./components/workspace/WorkspaceResourceCenter').then((module) => ({ default: module.WorkspaceResourceCenter })));
 
 interface AuthState {
   user: SessionUser | null;
@@ -68,12 +65,8 @@ const ProtectedRoute: React.FC<{
   isLoading: boolean;
   children: React.ReactNode;
 }> = ({ user, isLoading, children }) => {
-  if (isLoading) {
-    return <SurfaceLoader label="正在恢复会话" />;
-  }
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
+  if (isLoading) return <SurfaceLoader label="正在恢复会话" />;
+  if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 };
 
@@ -82,32 +75,23 @@ const LoginRoute: React.FC<{
   onLogin: (user: SessionUser) => void;
 }> = ({ user, onLogin }) => {
   const navigate = useNavigate();
-  if (user) {
-    return <Navigate to="/workspace" replace />;
-  }
+  if (user) return <Navigate to="/workspace" replace />;
   return (
     <Suspense fallback={<SurfaceLoader label="正在加载登录页" />}>
-      <CoCreationLogin
-        onLogin={onLogin}
-        onBack={() => navigate('/')}
-      />
+      <CoCreationLogin onLogin={onLogin} onBack={() => navigate('/')} />
     </Suspense>
   );
 };
 
 /**
- * 共创工作台独立应用
- * 支持两种认证模式：
- * 1. 独立访问：显示登录页面
- * 2. iframe 内嵌：通过 postMessage 接收主平台 token（SSO）
+ * 产品路由收口：
+ * - /                       极简首页
+ * - /login                  登录
+ * - /workspace              唯一核心工作台
+ * - /workspace/:conversationId  历史对话兼容入口，仍进入 GptWorkspace
+ * - /projects /assets /quotes   仅做旧链接兼容，重定向回工作台资源中心
  *
- * 路由：
- * - /           首页
- * - /login      登录
- * - /workspace  工作台
- * - /projects   项目库
- * - /assets     资产库
- * - /quotes     报价
+ * Workspace Graph 实验代码仍可保留在仓库中，但不再接管生产入口。
  */
 export const CoCreationStandaloneApp: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>({
@@ -117,7 +101,6 @@ export const CoCreationStandaloneApp: React.FC = () => {
   });
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const navigate = useNavigate();
-
   const isIframe = (() => {
     try { return window.self !== window.top; } catch { return true; }
   })();
@@ -141,15 +124,10 @@ export const CoCreationStandaloneApp: React.FC = () => {
       handleSessionRestored,
       onSessionError,
     );
-
     const handleMessage = (event: MessageEvent<unknown>): void => {
       if (
         !isIframe
-        || !isTrustedParentMessage(
-          event,
-          configuredSsoParentOrigin,
-          window.parent,
-        )
+        || !isTrustedParentMessage(event, configuredSsoParentOrigin, window.parent)
         || !event.data
         || typeof event.data !== 'object'
       ) return;
@@ -175,7 +153,7 @@ export const CoCreationStandaloneApp: React.FC = () => {
       unsubscribeBootstrap();
       window.removeEventListener('message', handleMessage);
     };
-  }, [handleLoginSuccess, isIframe]);
+  }, [handleLoginSuccess, handleSessionRestored, isIframe]);
 
   const handleLogout = useCallback(async (): Promise<void> => {
     setLogoutError(null);
@@ -190,166 +168,155 @@ export const CoCreationStandaloneApp: React.FC = () => {
 
   const userLabel = auth.user?.displayName || auth.user?.username || '';
 
+  const protectedWorkspace = (
+    <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
+      <StandaloneShell
+        isIframe={auth.isIframe}
+        userLabel={userLabel}
+        onLogout={handleLogout}
+        logoutError={logoutError}
+      />
+    </ProtectedRoute>
+  );
+
   return (
     <Routes>
       <Route
         path="/"
-        element={
+        element={(
           <LandingRoute
             userLabel={auth.user ? userLabel : null}
             isAuthenticating={auth.isLoading}
             isIframe={auth.isIframe}
           />
-        }
+        )}
       />
-      <Route
-        path="/login"
-        element={
-          <LoginRoute user={auth.user} onLogin={handleLoginSuccess} />
-        }
-      />
-      <Route
-        path="/workspace/:conversationId"
-        element={
-          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
-            <StandaloneShell
-              isIframe={auth.isIframe}
-              userLabel={userLabel}
-              onLogout={handleLogout}
-              logoutError={logoutError}
-              graphMode
-            />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/workspace"
-        element={
-          <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
-            <StandaloneShell
-              isIframe={auth.isIframe}
-              userLabel={userLabel}
-              onLogout={handleLogout}
-              logoutError={logoutError}
-            />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/login" element={<LoginRoute user={auth.user} onLogin={handleLoginSuccess} />} />
+      <Route path="/workspace" element={protectedWorkspace} />
+      <Route path="/workspace/:conversationId" element={protectedWorkspace} />
       <Route
         path="/projects"
-        element={
+        element={(
           <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
-            <StandaloneShell
-              isIframe={auth.isIframe}
-              userLabel={userLabel}
-              onLogout={handleLogout}
-              logoutError={logoutError}
-            />
+            <Navigate to="/workspace?resource=projects" replace />
           </ProtectedRoute>
-        }
+        )}
       />
       <Route
         path="/assets"
-        element={
+        element={(
           <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
-            <StandaloneShell
-              isIframe={auth.isIframe}
-              userLabel={userLabel}
-              onLogout={handleLogout}
-              logoutError={logoutError}
-            />
+            <Navigate to="/workspace?resource=assets" replace />
           </ProtectedRoute>
-        }
+        )}
       />
       <Route
         path="/quotes"
-        element={
+        element={(
           <ProtectedRoute user={auth.user} isLoading={auth.isLoading}>
-            <StandaloneShell
-              isIframe={auth.isIframe}
-              userLabel={userLabel}
-              onLogout={handleLogout}
-              logoutError={logoutError}
-            />
+            <Navigate to="/workspace?resource=quotes" replace />
           </ProtectedRoute>
-        }
+        )}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };
 
+const isResourceSection = (value: string | null): value is WorkspaceResourceSection =>
+  value === 'projects' || value === 'files' || value === 'assets' || value === 'versions' || value === 'quotes';
+
 const StandaloneShell: React.FC<{
   isIframe: boolean;
   userLabel: string;
   onLogout: () => Promise<void>;
   logoutError: string | null;
-  graphMode?: boolean;
-}> = ({ isIframe, userLabel, onLogout, logoutError, graphMode = false }) => {
+}> = ({ isIframe, userLabel, onLogout, logoutError }) => {
   const navigate = useNavigate();
-  const location = useLocation();
+  const params = useParams<{ conversationId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [newChatKey, setNewChatKey] = useState(0);
-  const graphConversationId = (location.pathname.match(/^\/workspace\/([^/]+)/) || [])[1];
-  const isGraphMode = graphMode || searchParams.get('graph') === '1';
-  const view: GptView = location.pathname.startsWith('/projects')
-    ? 'projects'
-    : location.pathname.startsWith('/assets')
-      ? 'assets'
-      : location.pathname.startsWith('/quotes')
-        ? 'quotes'
-        : 'workspace';
+  const [resourceRefreshKey, setResourceRefreshKey] = useState(0);
 
   const projectId = searchParams.get('project');
+  const projectName = searchParams.get('name');
   const initialPrompt = searchParams.get('prompt');
   const initialPreview = searchParams.get('preview');
-  const initialConversationId = searchParams.get('cid');
+  const queryConversationId = searchParams.get('cid');
+  const initialConversationId = queryConversationId || params.conversationId || null;
+  const resourceQuery = searchParams.get('resource');
+  const activeResource: WorkspaceResourceSection = isResourceSection(resourceQuery) ? resourceQuery : 'projects';
 
   const handleNewChat = useCallback(() => {
-    setNewChatKey((prev) => prev + 1);
+    setNewChatKey((previous) => previous + 1);
+    setResourceRefreshKey((previous) => previous + 1);
     navigate('/workspace', { replace: true });
   }, [navigate]);
 
   useEffect(() => {
-    if (initialPrompt) {
-      const params = new URLSearchParams(searchParams);
-      params.delete('prompt');
-      setSearchParams(params, { replace: true });
-    }
+    if (!initialPrompt) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
   }, [initialPrompt, searchParams, setSearchParams]);
 
-  const handleProjectLinked = useCallback((linkedProjectId: string) => {
-    if (view === 'workspace') {
-      const params = new URLSearchParams(searchParams);
-      params.set('project', linkedProjectId);
-      params.delete('prompt');
-      setSearchParams(params, { replace: true });
-    }
-  }, [view, searchParams, setSearchParams]);
+  const handleProjectLinked = useCallback((linkedProjectId: string, linkedProjectName: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('project', linkedProjectId);
+    if (linkedProjectName) next.set('name', linkedProjectName);
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
+    setResourceRefreshKey((previous) => previous + 1);
+  }, [searchParams, setSearchParams]);
+
+  const handleResourceChange = useCallback((section: WorkspaceResourceSection) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('resource', section);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleOpenProject = useCallback((pid: string, name: string, imageUrl: string | null) => {
+    // Switching projects must remount the legacy GptWorkspace so old messages do not
+    // leak into the newly selected project. This is a UI reset only; the existing
+    // project/history/workflow services remain untouched.
+    setNewChatKey((previous) => previous + 1);
+    const next = new URLSearchParams();
+    next.set('project', pid);
+    next.set('name', name);
+    next.set('resource', 'projects');
+    if (imageUrl) next.set('preview', imageUrl);
+    navigate(`/workspace?${next.toString()}`);
+  }, [navigate]);
+
+  const handleOpenConversation = useCallback((conversationId: string, title: string) => {
+    const next = new URLSearchParams();
+    next.set('cid', conversationId);
+    next.set('name', title);
+    navigate(`/workspace?${next.toString()}`);
+  }, [navigate]);
+
+  const handlePreviewUrl = useCallback((url: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('preview', url);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f5f5f4]">
       <Suspense fallback={null}>
-        <GptSidebar
-          view={view}
+        <WorkspaceResourceCenter
           userLabel={userLabel}
-          onNavigate={(next) => navigate(next === 'workspace' ? '/workspace' : `/${next}`)}
-          onNewChat={handleNewChat}
-          onOpenProject={(pid, name, imageUrl) => {
-            const params = new URLSearchParams();
-            params.set('project', pid);
-            params.set('name', name);
-            if (imageUrl) params.set('preview', imageUrl);
-            navigate(`/workspace?${params.toString()}`);
-          }}
-          onOpenConversation={(conversationId, title) => {
-            const params = new URLSearchParams();
-            params.set('cid', conversationId);
-            params.set('name', title);
-            navigate(`/workspace?${params.toString()}`);
-          }}
-          onLogout={() => void onLogout()}
           activeProjectId={projectId}
+          activeConversationId={initialConversationId}
+          activeSection={activeResource}
+          initiallyExpanded={Boolean(resourceQuery)}
+          refreshKey={resourceRefreshKey}
+          onSectionChange={handleResourceChange}
+          onNewChat={handleNewChat}
+          onOpenProject={handleOpenProject}
+          onOpenConversation={handleOpenConversation}
+          onPreviewUrl={handlePreviewUrl}
+          onLogout={() => void onLogout()}
         />
       </Suspense>
 
@@ -368,56 +335,31 @@ const StandaloneShell: React.FC<{
         ) : null}
 
         <div className="flex h-full min-h-0 flex-1">
-          <Suspense fallback={<SurfaceLoader label="正在加载" />}>
-            {isGraphMode ? (
-              <WorkspaceShell
-                key={newChatKey}
-                conversationId={graphConversationId}
-                initialPrompt={initialPrompt}
-                onConversationChanged={(cid, title) => {
-                  const params = new URLSearchParams();
-                  if (title) params.set('name', title);
-                  navigate(`/workspace/${cid}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
-                }}
-                onNewChat={() => {
-                  setNewChatKey((prev) => prev + 1);
-                  navigate('/workspace?graph=1', { replace: true });
-                }}
-              />
-            ) : view === 'workspace' ? (
-              <GptWorkspace
-                key={newChatKey}
-                initialPrompt={initialPrompt}
-                projectId={projectId}
-                projectName={searchParams.get('name')}
-                initialPreview={initialPreview}
-                initialConversationId={initialConversationId}
-                onProjectLinked={handleProjectLinked}
-                onNavigateHome={() => navigate('/')}
-              />
-            ) : view === 'quotes' ? (
-              <QuotesPage />
-            ) : (
-              <CoCreationHistoryPage
-                view={view}
-                onBack={() => navigate('/workspace')}
-              />
-            )}
+          <Suspense fallback={<SurfaceLoader label="正在加载工作台" />}>
+            <GptWorkspace
+              key={`${newChatKey}-${initialConversationId || 'new'}`}
+              initialPrompt={initialPrompt}
+              projectId={projectId}
+              projectName={projectName}
+              initialPreview={initialPreview}
+              initialConversationId={initialConversationId}
+              onProjectLinked={handleProjectLinked}
+              externalResourceCenter
+              onNavigateHome={() => navigate('/')}
+            />
           </Suspense>
         </div>
 
-        {view === 'workspace' && projectId ? (
+        {projectId ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-2">
             <div className="min-w-0 flex items-center gap-2">
               <span className="truncate text-xs font-medium text-slate-600">
-                当前项目：{searchParams.get('name') || projectId}
+                当前项目：{projectName || projectId}
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              {isIframe ? (
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">SSO</span>
-              ) : null}
-            </div>
+            {isIframe ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">SSO</span>
+            ) : null}
           </div>
         ) : null}
       </main>
