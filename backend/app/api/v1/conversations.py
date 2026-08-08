@@ -16,6 +16,7 @@ from app.schemas.conversation import (
     ConversationDetailData,
     ConversationListData,
     ConversationResponse,
+    ConversationUpdateRequest,
     MessageCreateRequest,
     MessageResponse,
 )
@@ -106,6 +107,37 @@ def get_conversation(
     return success_response(
         data=data.model_dump(by_alias=True),
         message="会话详情读取成功",
+    )
+
+
+@router.patch("/{conversation_id}", response_model=dict, summary="更新会话")
+def update_conversation(
+    conversation_id: UUID,
+    request: ConversationUpdateRequest,
+    auth_user: dict[str, object] = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    user_id = auth_user_id(auth_user)
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if request.project_id is not None:
+        conversation.project_id = request.project_id
+    if request.title is not None:
+        conversation.title = request.title
+
+    db.commit()
+    db.refresh(conversation)
+
+    return success_response(
+        data=_conversation_response(conversation).model_dump(by_alias=True),
+        message="会话已更新",
     )
 
 

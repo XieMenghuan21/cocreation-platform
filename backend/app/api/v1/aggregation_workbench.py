@@ -22,6 +22,7 @@ class CodexPromptWriterSkillResult(BaseModel):
     originalPrompt: str
     optimizedPrompt: str
     finalPrompt: str
+    comfyuiPrompt: str
     enabled: bool
     aiOptimized: bool
     references: list[dict[str, object]]
@@ -41,6 +42,7 @@ async def optimize_prompt(payload: OptimizePromptRequest, _user: dict = Depends(
         "originalPrompt": result.get("originalPrompt"),
         "optimizedPrompt": result.get("optimizedPrompt"),
         "finalPrompt": result.get("finalPrompt"),
+        "comfyuiPrompt": result.get("comfyuiPrompt"),
         "enabled": result.get("enabled", True),
         "aiOptimized": result.get("aiOptimized", False),
         "references": result.get("references", []),
@@ -56,6 +58,7 @@ async def prompt_writer_skill(payload: OptimizePromptRequest, _user: dict = Depe
         originalPrompt=result.get("originalPrompt", ""),
         optimizedPrompt=result.get("optimizedPrompt", ""),
         finalPrompt=result.get("finalPrompt", ""),
+        comfyuiPrompt=result.get("comfyuiPrompt", ""),
         enabled=result.get("enabled", True),
         aiOptimized=result.get("aiOptimized", False),
         references=result.get("references", []),

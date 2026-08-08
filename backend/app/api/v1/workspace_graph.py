@@ -13,6 +13,7 @@ from app.models.conversation import Conversation
 from app.schemas.workspace_graph import TurnRequest, TurnResponse, WorkspaceSnapshotData
 from app.services.workspace_graph_service import workspace_graph_service
 from app.services.workspace_turn_service import WorkspaceTurnError, workspace_turn_service
+from app.services.agents.render_agent import sync_node_from_task
 from app.utils.response import error_response, success_response
 
 router = APIRouter(prefix="/conversations")
@@ -88,6 +89,10 @@ def get_workspace(
     nodes = workspace_graph_service.get_nodes(
         db, user_id=user_id, conversation_id=conversation_id
     )
+    for node in nodes:
+        if node.task_id and node.status in {"queued", "running"}:
+            sync_node_from_task(db, node.task_id)
+    db.commit()
     active_tasks = [
         {
             "taskId": n.task_id,

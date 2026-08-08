@@ -5,8 +5,10 @@ import {
   type TurnResponse,
   type WorkspaceNode,
 } from '../../services/workspaceGraphService';
+import { assetService } from '../../services/assetService';
 import {
   WorkspaceNodeRenderer,
+  NodeCarousel,
   NodeFallback,
   type NodeAction,
 } from './WorkspaceNodeRenderer';
@@ -18,6 +20,13 @@ interface MessageItem {
   nodes: WorkspaceNode[];
   pending?: boolean;
   failed?: boolean;
+}
+
+interface PendingAsset {
+  id: string;
+  url: string;
+  name: string;
+  uploading?: boolean;
 }
 
 interface ConversationPaneProps {
@@ -33,6 +42,40 @@ const nextLocalId = (() => {
   return () => `msg-${Date.now()}-${(counter += 1)}`;
 })();
 
+const MessageNodes: React.FC<{
+  nodes: WorkspaceNode[];
+  onAction: (node: WorkspaceNode, action: NodeAction) => void;
+}> = ({ nodes, onAction }) => {
+  const directions = nodes.filter((n) => n.type === 'design_direction');
+  const others = nodes.filter((n) => n.type !== 'design_direction');
+  return (
+    <>
+      {directions.length > 1 ? (
+        <div className="mb-2">
+          <NodeCarousel
+            title="设计方向"
+            summary="滑动查看所有方向，选择一个继续。"
+            nodes={directions}
+            onAction={onAction}
+          />
+        </div>
+      ) : null}
+      {directions.length > 1
+        ? null
+        : directions.map((node) => (
+            <div key={node.id} className="mb-2">
+              <WorkspaceNodeRenderer node={node} onAction={onAction} />
+            </div>
+          ))}
+      {others.map((node) => (
+        <div key={node.id} className="mb-2">
+          <WorkspaceNodeRenderer node={node} onAction={onAction} />
+        </div>
+      ))}
+    </>
+  );
+};
+
 export const ConversationPane: React.FC<ConversationPaneProps> = ({
   conversationId,
   initialPrompt,
@@ -44,7 +87,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [assets, setAssets] = useState<Array<{ url: string; name: string }>>([]);
+  const [assets, setAssets] = useState<PendingAsset[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const didAutoRunRef = useRef(false);
@@ -111,6 +154,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
       setSending(true);
       setInput('');
       const userText = trimmed;
+      const sentAssetIds = assets.map((a) => a.id);
       setMessages((prev) => [
         ...prev,
         {
@@ -129,10 +173,10 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
       ]);
       setAssets([]);
       try {
-        const payload = {
-          text: userText || null,
-          assetIds: [],
-          action: action
+      const payload = {
+        text: userText || null,
+        assetIds: sentAssetIds,
+        action: action
             ? { nodeId: action.nodeId, type: action.type }
             : null,
         };
@@ -172,8 +216,23 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
       const file = event.target.files?.[0];
       if (!file) return;
       const url = URL.createObjectURL(file);
-      setAssets((prev) => [...prev, { url, name: file.name }]);
+      const pendingId = `pending-${Date.now()}`;
+      setAssets((prev) => [...prev, { id: pendingId, url, name: file.name, uploading: true }]);
       event.target.value = '';
+      try {
+        const record = await assetService.upload(file, {
+          kind: 'image',
+          source: 'conversation_attachment',
+        });
+        setAssets((prev) =>
+          prev.map((a) =>
+            a.url === url ? { ...a, id: record.id, uploading: false } : a,
+          ),
+        );
+      } catch {
+        setAssets((prev) => prev.filter((a) => a.url !== url));
+        setError('图片上传失败，请重试');
+      }
     },
     [],
   );
@@ -184,6 +243,46 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
       void send(initialPrompt);
     }
   }, [initialPrompt, send]);
+
+  useEffect(() => {
+    const convId = convIdRef.current;
+    if (!convId) return;
+
+    const hasRunning = messages.some((m) =>
+      m.nodes.some((n) => n.status === 'running' || n.status === 'queued'),
+    );
+    if (!hasRunning) return;
+
+    const interval = setInterval(() => {
+      workspaceGraphService
+        .snapshot(convId)
+        .then((snapshot) => {
+          setMessages((prev) => {
+            const knownIds = new Set<string>();
+            prev.forEach((m) => m.nodes.forEach((n) => knownIds.add(n.id)));
+            return prev.map((msg) => {
+              const nodes = msg.nodes.map((node) => {
+                const fresh = snapshot.nodes.find((n) => n.id === node.id);
+                return fresh ? { ...node, ...fresh } : node;
+              });
+              if (msg.role !== 'assistant') return { ...msg, nodes };
+              const attached = snapshot.nodes.filter((n) => {
+                if (knownIds.has(n.id)) return false;
+                return nodes.some((p) => p.id === n.parentId);
+              });
+              if (attached.length === 0) return { ...msg, nodes };
+              attached.forEach((n) => knownIds.add(n.id));
+              return { ...msg, nodes: [...nodes, ...attached] };
+            });
+          });
+        })
+        .catch(() => {
+          /* ignore polling errors */
+        });
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [messages]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -219,11 +318,9 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
                   {message.text}
                 </div>
               ) : null}
-              {message.nodes.map((node) => (
-                <div key={node.id} className="mb-2">
-                  <WorkspaceNodeRenderer node={node} onAction={handleAction} />
-                </div>
-              ))}
+              {message.nodes.length > 0 ? (
+                <MessageNodes nodes={message.nodes} onAction={handleAction} />
+              ) : null}
               {message.pending ? (
                 <div className="flex items-center gap-2 px-1 text-sm text-slate-400">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -256,13 +353,17 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
             >
               <img src={asset.url} alt={asset.name} className="h-6 w-6 rounded object-cover" />
               <span className="max-w-[140px] truncate">{asset.name}</span>
-              <button
-                type="button"
-                onClick={() => setAssets((prev) => prev.filter((a) => a.url !== asset.url))}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                ×
-              </button>
+              {asset.uploading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setAssets((prev) => prev.filter((a) => a.url !== asset.url))}
+                  className="text-slate-400 hover:text-slate-700"
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -301,7 +402,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({
           <button
             type="button"
             onClick={() => void send(input)}
-            disabled={sending || (!input.trim())}
+            disabled={sending || (!input.trim()) || assets.some((a) => a.uploading)}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
           >
             <Send className="h-4 w-4" />

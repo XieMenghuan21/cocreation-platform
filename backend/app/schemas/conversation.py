@@ -14,6 +14,15 @@ class ConversationCreateRequest(BaseModel):
     title: str = Field(default="新对话", max_length=255)
 
 
+class ConversationUpdateRequest(BaseModel):
+    """会话更新：项目创建后绑定 project_id。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str | None = Field(default=None, alias="projectId", max_length=160)
+    title: str | None = Field(default=None, max_length=255)
+
+
 class MessageCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

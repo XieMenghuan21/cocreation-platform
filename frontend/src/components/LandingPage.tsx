@@ -123,7 +123,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     handleSubmit();
                   }
                 }}
-                placeholder="描述你的设计需求，支持文字、图片、PDF、CAD 和语音..."
+                placeholder="描述你的设计需求…"
                 rows={1}
                 className="w-full resize-none border-0 bg-transparent pr-12 text-sm text-slate-900 outline-none placeholder:text-slate-400"
               />
@@ -143,19 +143,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             <div className="mt-3 flex items-center justify-center gap-2">
               {[
-                { icon: Paperclip, label: '上传文件' },
-                { icon: Mic, label: '语音' },
-                { icon: Camera, label: '拍照' },
+                { icon: Paperclip, label: '上传文件', coming: true },
+                { icon: Mic, label: '语音', coming: true },
+                { icon: Camera, label: '拍照', coming: true },
               ].map((pill) => {
                 const Icon = pill.icon;
                 return (
                   <button
                     key={pill.label}
                     type="button"
-                    className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs text-slate-500 transition hover:bg-slate-50"
+                    disabled
+                    title="开发中"
+                    className="flex cursor-not-allowed items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs text-slate-400 transition"
                   >
                     <Icon className="size-3.5" />
                     {pill.label}
+                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">
+                      开发中
+                    </span>
                   </button>
                 );
               })}

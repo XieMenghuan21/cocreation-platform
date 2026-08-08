@@ -351,22 +351,29 @@ class ImagePromptOptimizerService:
             except Exception as exc:
                 logger.warning("[PromptOptimizer] NodAPI AI 优化失败，回退到规则拼接: %s", exc)
 
-        if ai_optimized and not self._looks_like_unhelpful_optimization(clean_prompt, ai_optimized):
+        if ai_optimized and not self._looks_like_unhelpful_optimization(clean_prompt, ai_optimized.get("zh", "")):
+            zh_prompt = str(ai_optimized.get("zh") or "").strip()
+            en_prompt = str(ai_optimized.get("en") or "").strip()
+            if not zh_prompt:
+                zh_prompt = en_prompt
             return {
                 "originalPrompt": clean_prompt,
-                "optimizedPrompt": ai_optimized,
-                "finalPrompt": ai_optimized,
+                "optimizedPrompt": zh_prompt,
+                "finalPrompt": zh_prompt,
+                "comfyuiPrompt": en_prompt or zh_prompt,
                 "enabled": True,
                 "aiOptimized": True,
                 "references": [item.to_dict() for item in all_references],
             }
 
-        # 回退：规则拼接
+        # 回退：规则拼接（中文展示 + 英文生图）
         optimized_prompt = self._build_optimized_prompt(clean_prompt, all_references, images=images, model=model)
+        comfyui_prompt = self._build_comfyui_prompt(clean_prompt)
         return {
             "originalPrompt": clean_prompt,
             "optimizedPrompt": optimized_prompt,
             "finalPrompt": optimized_prompt,
+            "comfyuiPrompt": comfyui_prompt,
             "enabled": True,
             "aiOptimized": False,
             "references": [item.to_dict() for item in all_references],
@@ -397,9 +404,10 @@ class ImagePromptOptimizerService:
             "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
             "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
             "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. 输出为中文提示词，包含产品名、材质、尺寸、多视图描述和质量词。\n"
-            "7. 直接输出优化后的提示词，不要多余解释。\n"
-            "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
+            "6. zh：中文提示词，包含产品名、材质、尺寸、多视图描述和质量词（展示给用户看）。\n"
+            "7. en：英文提示词，把 zh 完整翻译成地道的英文生图提示词，面向 Stable Diffusion / ComfyUI，逗号分隔标签式写法，包含 product、material、perspective、lighting、style（真正发给生图模型用）。\n"
+            "8. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
+            "9. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
 
         user_message = (
@@ -420,15 +428,13 @@ class ImagePromptOptimizerService:
                 {"role": "user", "content": user_message},
             ],
             temperature=0.7,
-            max_tokens=512,
+            max_tokens=1024,
         )
         content = str(result.get("content") or "")
         if not content.strip():
             raise RuntimeError("NodAPI 响应为空")
 
-        content = content.strip()
-        content = re.sub(r"^(优化后的提示词|优化提示词|Prompt|优化结果)[:\uff1a]\s*", "", content, flags=re.IGNORECASE)
-        return content.strip().strip('"').strip("'")
+        return self._parse_bilingual_json(content.strip())
 
     async def _optimize_with_dashscope(
         self,
@@ -483,9 +489,10 @@ class ImagePromptOptimizerService:
             "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
             "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
             "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. 输出为中文提示词，包含产品名、材质、尺寸、多视图描述和质量词。\n"
-            "7. 直接输出优化后的提示词，不要多余解释。\n"
-            "8. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
+            "6. zh：中文提示词，包含产品名、材质、尺寸、多视图描述和质量词（展示给用户看）。\n"
+            "7. en：英文提示词，把 zh 完整翻译成地道的英文生图提示词，面向 Stable Diffusion / ComfyUI，逗号分隔标签式写法，包含 product、material、perspective、lighting、style（真正发给生图模型用）。\n"
+            "8. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
+            "9. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
         )
 
         user_message = (
@@ -506,7 +513,7 @@ class ImagePromptOptimizerService:
                 {"role": "user", "content": user_message},
             ],
             "temperature": 0.7,
-            "max_tokens": 512,
+            "max_tokens": 1024,
         }
 
         headers = {"Content-Type": "application/json"}
@@ -525,10 +532,7 @@ class ImagePromptOptimizerService:
         content = self._extract_content(data)
         if not content.strip():
             raise RuntimeError("NodAPI 响应为空")
-        content = content.strip()
-        content = re.sub(r"^(优化后的提示词|优化提示词|Prompt|优化结果)[:\uff1a]\s*", "", content, flags=re.IGNORECASE)
-        content = content.strip().strip('"').strip("'")
-        return content
+        return self._parse_bilingual_json(content.strip())
 
     @staticmethod
     def _extract_content(data: object) -> str:
@@ -545,6 +549,49 @@ class ImagePromptOptimizerService:
             return ""
         content = message.get("content")
         return content if isinstance(content, str) else ""
+
+    @staticmethod
+    def _parse_bilingual_json(content: str) -> dict[str, str]:
+        """解析 {"zh": "...", "en": "..."}。失败时整段作为中文，英文用规则兜底。"""
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        try:
+            import json as _json
+
+            parsed = _json.loads(text)
+            if isinstance(parsed, dict):
+                zh = str(parsed.get("zh") or parsed.get("displayPrompt") or "").strip()
+                en = str(parsed.get("en") or parsed.get("generationPrompt") or "").strip()
+                if zh or en:
+                    return {
+                        "zh": zh or en,
+                        "en": en or zh,
+                    }
+        except (ValueError, TypeError):
+            pass
+
+        zh_match = re.search(r"\"?zh\"?\s*[:：]\s*\"(.*?)\"\s*,?\s*\"?en\"?\s*[:：]\s*\"(.*?)\"", text, flags=re.DOTALL)
+        if zh_match:
+            return {"zh": zh_match.group(1).strip(), "en": zh_match.group(2).strip()}
+
+        normalized = re.sub(r"^(优化后的提示词|优化提示词|Prompt|优化结果)[:：]\s*", "", text, flags=re.IGNORECASE)
+        normalized = normalized.strip().strip('"').strip("'")
+        return {"zh": normalized, "en": ImagePromptOptimizerService._build_comfyui_prompt(normalized)}
+
+    @staticmethod
+    def _build_comfyui_prompt(prompt: str) -> str:
+        """中文生图提示词无法直接用 AD/SD 时，用英文质量词模板兜底。"""
+        text = re.sub(r"\s+", " ", prompt).strip()
+        if not text:
+            return ""
+        quality = (
+            "industrial design concept render, orthographic projection, engineering drawing style, "
+            "dimension annotation, material callout, clean line work, white background, "
+            "technical presentation layout, multi-view arrangement, high detail, sharp focus"
+        )
+        return f"{text}, {quality}"
 
     def search(self, prompt: str, *, limit: int = 5) -> list[PromptReference]:
         tokens = self._tokenize(prompt)

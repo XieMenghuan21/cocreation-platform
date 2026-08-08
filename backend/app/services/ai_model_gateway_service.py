@@ -210,7 +210,8 @@ class AIModelGatewayService:
             model=model,
             optimize_prompt=optimize_prompt,
         )
-        final_prompt = str(prompt_meta["finalPrompt"])
+        # ComfyUI 等生图模型吃英文提示词；展示用中文 optimizedPrompt
+        final_prompt = str(prompt_meta.get("comfyuiPrompt") or prompt_meta["finalPrompt"])
         auto_retry = not provider
         provider_candidates = [provider_name]
         if auto_retry:
@@ -279,10 +280,12 @@ class AIModelGatewayService:
         optimized_prompt = str(meta.get("optimizedPrompt") or clean_prompt)
         references = meta.get("references")
         final_prompt = optimized_prompt if optimize_prompt else clean_prompt
+        comfyui_prompt = str(meta.get("comfyuiPrompt") or final_prompt)
         return {
             "originalPrompt": clean_prompt,
             "optimizedPrompt": optimized_prompt,
             "finalPrompt": final_prompt,
+            "comfyuiPrompt": comfyui_prompt,
             "enabled": bool(optimize_prompt),
             "aiOptimized": bool(meta.get("aiOptimized")),
             "references": references if isinstance(references, list) else [],

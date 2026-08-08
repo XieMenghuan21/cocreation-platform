@@ -1,18 +1,31 @@
-import React from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Box,
   Boxes,
   Calculator,
   Check,
+  ChevronLeft,
+  ChevronRight,
   FileText,
+  Loader2,
   Package,
   Sparkles,
   X,
 } from 'lucide-react';
 import type { WorkspaceNode } from '../../services/workspaceGraphService';
 
+export type NodeActionType =
+  | 'confirm'
+  | 'select'
+  | 'request'
+  | 'complete'
+  | 'generate_3d'
+  | 'generate_cad'
+  | 'generate_quote'
+  | 'generate_package';
+
 export interface NodeAction {
-  type: 'confirm' | 'select' | 'request' | 'complete';
+  type: NodeActionType;
   label: string;
   value?: unknown;
 }
@@ -45,6 +58,19 @@ const TYPE_META: Record<string, { icon: React.ReactNode; label: string; accent: 
   next_action: { icon: <Sparkles className="h-4 w-4" />, label: '下一步', accent: 'border-slate-200 bg-white' },
 };
 
+const nextActionButtons = (node: WorkspaceNode): NodeAction[] => {
+  const recs = (node.outputData?.recommendations as
+    | Array<{ type?: string; label?: string; description?: string }>
+    | undefined) || [];
+  return recs
+    .map((rec) => ({
+      type: (rec.type ?? 'request') as NodeActionType,
+      label: rec.label ?? rec.type ?? '继续',
+      value: rec,
+    }))
+    .filter((action) => action.label);
+};
+
 const getPreviewUrls = (node: WorkspaceNode): string[] => {
   const urls: string[] = [];
   const outputs = node.outputData || {};
@@ -64,12 +90,22 @@ const defaultActionsFor = (node: WorkspaceNode): NodeAction[] => {
   if (node.status === 'superseded') return [];
   if (node.status === 'completed') {
     if (node.type === 'project') return [{ type: 'request', label: '继续设计' }];
-    if (node.type === 'design_direction') return [{ type: 'request', label: '以此方向生成' }];
+    if (node.type === 'cad') return [{ type: 'generate_quote', label: '生成报价' }];
+    if (node.type === 'model_3d') return [{ type: 'generate_cad', label: '生成 CAD' }];
+    if (node.type === 'render') return [{ type: 'generate_3d', label: '建立 3D' }];
     return [];
   }
   if (node.status === 'waiting_user') {
     if (node.type === 'requirement') return [{ type: 'confirm', label: '确认需求' }];
+    if (node.type === 'design_direction') return [{ type: 'confirm', label: '选择此方向' }];
+    if (node.type === 'next_action') return nextActionButtons(node);
     return [{ type: 'confirm', label: '确认' }];
+  }
+  if (node.status === 'running' || node.status === 'queued') {
+    if (node.type === 'render' || node.type === 'model_3d' || node.type === 'cad') {
+      return [{ type: 'request', label: '刷新进度' }];
+    }
+    return [];
   }
   return [];
 };
@@ -117,6 +153,24 @@ export const WorkspaceNodeRenderer: React.FC<WorkspaceNodeRendererProps> = ({
           <p className="mt-1 text-xs text-slate-400">项目 ID：{node.projectId}</p>
         ) : null}
 
+        {node.type === 'quote' && typeof node.outputData?.range === 'object'
+          ? (
+            <div className="mt-2 rounded-xl border border-teal-100 bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-700">
+              ≈ {String((node.outputData.range as Record<string, unknown>).min)} ~ {String((node.outputData.range as Record<string, unknown>).max)} CNY
+            </div>
+          ) : null}
+
+        {(node.status === 'running' || node.status === 'queued') ? (
+          <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>
+              {typeof node.uiData?.progress === 'number'
+                ? `正在执行 ${node.uiData.progress}%`
+                : '排队执行中…'}
+            </span>
+          </div>
+        ) : null}
+
         {previewUrls.length > 0 ? (
           <div className="mt-3 grid grid-cols-2 gap-2">
             {previewUrls.slice(0, 4).map((url, index) => (
@@ -156,3 +210,148 @@ export const NodeFallback: React.FC<{ node: WorkspaceNode }> = ({ node }) => (
     <span className="truncate">{node.title}（{node.type}）</span>
   </div>
 );
+
+interface NodeCarouselProps {
+  title: string;
+  nodes: WorkspaceNode[];
+  onAction?: (node: WorkspaceNode, action: NodeAction) => void;
+  summary?: string;
+}
+
+/**
+ * 轮播卡片：把多个同级节点（如设计方向 A/B/C）放进一张卡内横向滑动，
+ * 替代竖排多张卡片。
+ */
+export const NodeCarousel: React.FC<NodeCarouselProps> = ({
+  title,
+  nodes,
+  onAction,
+  summary,
+}) => {
+  const [index, setIndex] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const scrollTo = useCallback((next: number) => {
+    const clamped = Math.max(0, Math.min(next, nodes.length - 1));
+    setIndex(clamped);
+    const el = scrollRef.current;
+    if (el) {
+      const child = el.children[clamped] as HTMLElement | undefined;
+      child?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [nodes.length]);
+
+  const supersededCount = nodes.filter((n) => n.status === 'superseded').length;
+  const liveCount = nodes.length - supersededCount;
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-violet-200 bg-violet-50/60">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-violet-600">
+            <Sparkles className="h-4 w-4" />
+          </span>
+          <span className="truncate text-sm font-semibold text-slate-800">{title}</span>
+        </div>
+        <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+          {liveCount > 0 ? `${liveCount} 个可选项` : `${nodes.length} 个方向`}
+        </span>
+      </div>
+
+      {summary ? (
+        <p className="px-4 pb-2 text-xs leading-relaxed text-slate-500">{summary}</p>
+      ) : null}
+
+      <div
+        ref={scrollRef}
+        className="no-scrollbar flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-4"
+      >
+        {nodes.map((node) => {
+          const ui = node.uiData ?? {};
+          const keywords = Array.isArray(ui.styleKeywords)
+            ? (ui.styleKeywords as string[]).join(' / ')
+            : '';
+          const cmf = typeof ui.cmf === 'string' ? ui.cmf : '';
+          const isSuperseded = node.status === 'superseded';
+          const isDone = node.status === 'completed';
+          return (
+            <div
+              key={node.id}
+              className={`flex w-56 shrink-0 snap-start flex-col rounded-xl border bg-white p-3.5 transition ${
+                isSuperseded
+                  ? 'border-slate-200 opacity-45'
+                  : isDone
+                    ? 'border-emerald-200 ring-1 ring-emerald-100'
+                    : 'border-violet-200'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-slate-800">{node.title}</span>
+                {isSuperseded ? (
+                  <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-400">
+                    未选
+                  </span>
+                ) : isDone ? (
+                  <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700">
+                    <Check className="h-2.5 w-2.5" /> 已选
+                  </span>
+                ) : null}
+              </div>
+              {node.summary ? (
+                <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                  {node.summary}
+                </p>
+              ) : null}
+              {keywords ? (
+                <p className="mt-2 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-400">风格：</span>
+                  {keywords}
+                </p>
+              ) : null}
+              {cmf ? (
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-400">材质：</span>
+                  {cmf}
+                </p>
+              ) : null}
+              {!isSuperseded && !isDone ? (
+                <button
+                  type="button"
+                  onClick={() => onAction?.(node, { type: 'confirm', label: '选择此方向' })}
+                  className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+                >
+                  选择此方向
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {nodes.length > 1 ? (
+        <div className="flex items-center justify-between border-t border-violet-100 bg-white/70 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => scrollTo(index - 1)}
+            disabled={index === 0}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:opacity-30"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="text-[11px] font-medium text-slate-500">
+            {index + 1} / {nodes.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => scrollTo(index + 1)}
+            disabled={index >= nodes.length - 1}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+};

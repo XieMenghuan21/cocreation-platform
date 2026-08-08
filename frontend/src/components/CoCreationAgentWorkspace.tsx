@@ -1,4 +1,8 @@
 /**
+ * @deprecated Legacy workspace.
+ * 新 AI 共创工作台请使用 components/workspace + GptWorkspace.
+ * 禁止新增业务流程逻辑。
+ *
  * 共创智能体工业设计工作台
  * 聚焦全行业 CAD 设计、3D 预览与爆炸图协同场景。
  */

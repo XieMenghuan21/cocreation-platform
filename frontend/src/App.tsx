@@ -56,7 +56,7 @@ const LandingRoute: React.FC<{
         onEnter={() => navigate('/workspace')}
         onLogin={() => navigate('/login')}
         onSubmitPrompt={(prompt) => {
-          navigate(`/workspace?graph=1&prompt=${encodeURIComponent(prompt)}`);
+          navigate(`/workspace?prompt=${encodeURIComponent(prompt)}`);
         }}
       />
     </Suspense>
@@ -307,7 +307,7 @@ const StandaloneShell: React.FC<{
 
   const handleNewChat = useCallback(() => {
     setNewChatKey((prev) => prev + 1);
-    navigate('/workspace?graph=1', { replace: true });
+    navigate('/workspace', { replace: true });
   }, [navigate]);
 
   useEffect(() => {
@@ -344,8 +344,9 @@ const StandaloneShell: React.FC<{
           }}
           onOpenConversation={(conversationId, title) => {
             const params = new URLSearchParams();
+            params.set('cid', conversationId);
             params.set('name', title);
-            navigate(`/workspace/${conversationId}?${params.toString()}`);
+            navigate(`/workspace?${params.toString()}`);
           }}
           onLogout={() => void onLogout()}
           activeProjectId={projectId}
