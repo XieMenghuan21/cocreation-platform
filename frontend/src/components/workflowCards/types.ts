@@ -20,6 +20,8 @@ export interface MaterialsRequestCardData {
   projectName: string;
   fields: MaterialField[];
   collected: Record<string, string>;
+  required?: boolean;
+  description?: string;
 }
 export interface ProjectCreatedCardData {
   name: string;
@@ -77,7 +79,7 @@ export interface NextStepRecommendation {
   agent: string;
   icon: string;
   /** confirm 只表示确认当前业务节点，不应再伪装成 quote。 */
-  action: 'confirm' | 'render' | '3d' | 'cad' | 'quote' | 'package';
+  action: 'confirm' | 'design_sheet' | 'plan_2d' | 'render' | 'scene_fusion' | 'explosion' | '3d' | 'cad' | 'quote' | 'package';
 }
 export interface NextStepCardData {
   current: string;

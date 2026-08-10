@@ -118,6 +118,256 @@ def test_no_output_workflow_does_not_require_media_pipeline() -> None:
     assert result["outputs"] == {}
 
 
+def test_three_preview_flag_does_not_invoke_real_3d_chain() -> None:
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    request = IndustrialDesignWorkflowRequest.model_validate(
+        {
+            "inputType": "text",
+            "text": "生成一个二维仿3D效果图",
+            "options": {
+                "generateCad": False,
+                "generateDrawing": False,
+                "generateThreePreview": True,
+                "generateRender": False,
+                "generateExplosion": False,
+                "enhanceImage": False,
+            },
+        }
+    )
+
+    result = asyncio.run(service.create_workflow(request, {"sub": "alice"}))
+
+    assert result["status"] == "completed"
+    assert result["outputs"] == {}
+
+
+def test_enhance_image_prompt_is_detailed_for_phone_stand_poster() -> None:
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    request = IndustrialDesignWorkflowRequest.model_validate(
+        {
+            "inputType": "text",
+            "text": "兔子手机支架宣传海报，手机放在支架上",
+            "projectName": "兔子手机支架",
+            "industry": "消费电子",
+            "options": {
+                "generateCad": False,
+                "generateDrawing": False,
+                "generateThreePreview": False,
+                "generateRender": True,
+                "generateExplosion": False,
+                "enhanceImage": True,
+            },
+        }
+    )
+
+    prompt = service._build_enhance_image_prompt("兔子手机支架", request, service._build_design_spec(request))
+
+    assert "SUBJECT LOCK" in prompt
+    assert "REFERENCE IMAGE USAGE" in prompt
+    assert "PHYSICAL PLAUSIBILITY" in prompt
+    assert "CAMERA AND LENS" in prompt
+    assert "phone must rest on the cradle" in prompt
+    assert "must not intersect" in prompt
+    assert len(prompt) >= 2000
+
+
+def test_image_prompt_propaganda_stage_is_detailed_for_phone_stand() -> None:
+    """_build_image_prompt 宣发阶段对手机支架生成超详细分段式提示词。"""
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    request = IndustrialDesignWorkflowRequest.model_validate(
+        {
+            "inputType": "text",
+            "text": "兔子手机支架，手机放在支架上",
+            "projectName": "兔子手机支架",
+            "industry": "消费电子",
+            "options": {
+                "generateCad": False,
+                "generateDrawing": False,
+                "generateThreePreview": False,
+                "generateRender": True,
+                "generateExplosion": False,
+                "enhanceImage": False,
+            },
+        }
+    )
+
+    prompt = service._build_image_prompt("兔子手机支架", request, service._build_design_spec(request))
+
+    assert "DETAILED IMAGE GENERATION BRIEF" in prompt
+    assert "INDUSTRY CONTEXT" in prompt
+    assert "SUBJECT DESCRIPTION" in prompt
+    assert "PRODUCT STRUCTURE" in prompt
+    assert "PHYSICAL PLAUSIBILITY" in prompt
+    assert "POSTER COMPOSITION" in prompt
+    assert "SCENE DESIGN" in prompt
+    assert "MATERIAL AND SURFACE DETAIL" in prompt
+    assert "LIGHTING" in prompt
+    assert "CAMERA AND LENS" in prompt
+    assert "GRAPHIC AND LAYOUT RULES" in prompt
+    assert "QUALITY TARGET" in prompt
+    assert "NEGATIVE PROMPT" in prompt
+    assert "phone must rest on the cradle" in prompt
+    assert "must not intersect" in prompt
+    assert len(prompt) >= 2000
+
+
+def test_image_prompt_propaganda_stage_furniture_is_detailed() -> None:
+    """_build_image_prompt 宣发阶段对家具场景生成超详细分段式提示词。"""
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    request = IndustrialDesignWorkflowRequest.model_validate(
+        {
+            "inputType": "text",
+            "text": "新中式实木茶几宣传图",
+            "projectName": "新中式实木茶几",
+            "industry": "家居智造",
+            "options": {
+                "generateCad": False,
+                "generateDrawing": False,
+                "generateThreePreview": False,
+                "generateRender": True,
+                "generateExplosion": False,
+                "enhanceImage": False,
+            },
+        }
+    )
+
+    prompt = service._build_image_prompt("新中式实木茶几", request, service._build_design_spec(request))
+
+    assert "DETAILED IMAGE GENERATION BRIEF" in prompt
+    assert "INDUSTRY CONTEXT" in prompt
+    assert "SUBJECT DESCRIPTION" in prompt
+    assert "PRODUCT STRUCTURE" in prompt
+    assert "PHYSICAL PLAUSIBILITY" in prompt
+    assert "POSTER COMPOSITION" in prompt
+    assert "SCENE DESIGN" in prompt
+    assert "MATERIAL AND SURFACE DETAIL" in prompt
+    assert "LIGHTING" in prompt
+    assert "CAMERA AND LENS" in prompt
+    assert "GRAPHIC AND LAYOUT RULES" in prompt
+    assert "QUALITY TARGET" in prompt
+    assert "NEGATIVE PROMPT" in prompt
+    assert "wood grain" in prompt
+    assert "fabric" in prompt
+    assert len(prompt) >= 2000
+
+
+def test_workflow_prompts_apply_common_sense_to_non_phone_products() -> None:
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    request = IndustrialDesignWorkflowRequest.model_validate(
+        {
+            "inputType": "text",
+            "text": "户外储能电源宣传海报，带屏幕、插座、提手和散热孔",
+            "projectName": "户外储能电源",
+            "industry": "装备制造",
+            "options": {
+                "generateCad": False,
+                "generateDrawing": False,
+                "generateThreePreview": False,
+                "generateRender": True,
+                "generateExplosion": False,
+                "enhanceImage": True,
+            },
+        }
+    )
+
+    image_prompt = service._build_image_prompt("户外储能电源", request, service._build_design_spec(request))
+    edit_prompt = service._build_enhance_image_prompt("户外储能电源", request, service._build_design_spec(request))
+
+    for prompt in (image_prompt, edit_prompt):
+        assert "PRODUCT COMMON SENSE" in prompt
+        assert "ports aligned on the front panel" in prompt
+        assert "screen and buttons flush with the housing" in prompt
+        assert "vents follow a consistent grid" in prompt
+        assert "cables plug into ports and never pass through the shell" in prompt
+
+
+def test_image_edit_prompt_modes_lock_reference_identity() -> None:
+    _, db_context_factory = _session_context_factory()
+    service = IndustrialDesignWorkflowService(
+        ai_model_gateway=FakeAiModelGateway(),
+        drawing_service=FakeDrawingService(),
+        db_context_factory=db_context_factory,
+    )
+    base = {
+        "inputType": "text",
+        "text": "三层冰箱，白色面板，透明抽屉，圆角箱体",
+        "projectName": "三层冰箱",
+        "industry": "家电",
+        "options": {
+            "generateCad": False,
+            "generateDrawing": False,
+            "generateThreePreview": False,
+            "generateRender": True,
+            "generateExplosion": False,
+            "enhanceImage": True,
+        },
+    }
+
+    for mode, expected in (
+        ("plan_2d", "2D ORTHOGRAPHIC ENGINEERING DRAWING BRIEF"),
+        ("scene_fusion", "SCENE FUSION IMAGE EDITING BRIEF"),
+        ("exploded", "EXPLODED ASSEMBLY IMAGE EDITING BRIEF"),
+        ("fake_3d", "FAUX 3D IMAGE EDITING BRIEF"),
+    ):
+        request = IndustrialDesignWorkflowRequest.model_validate(
+            {**base, "context": {"imageEditMode": mode}}
+        )
+        prompt = service._build_enhance_image_prompt(
+            "三层冰箱",
+            request,
+            service._build_design_spec(request),
+        )
+
+        assert expected in prompt
+        assert "SUBJECT LOCK" in prompt
+        assert "reference image is the sole identity source" in prompt
+        assert "Do NOT redesign the product" in prompt
+        assert "三层冰箱" in prompt
+        if mode == "plan_2d":
+            assert "front view, rear view, left side view, right side view, top view, and bottom view" in prompt
+            assert "No photorealistic shadows, no lifestyle scene" in prompt
+
+
+def test_apply_image_edit_result_can_write_explosion_output() -> None:
+    outputs: dict[str, object] = {}
+
+    IndustrialDesignWorkflowService._apply_image_edit_result(
+        outputs,
+        {"assetId": "asset-1", "url": "/api/v1/assets/asset-1/download"},
+        output_kind="explosion",
+    )
+
+    assert outputs["explosionPngAssetId"] == "asset-1"
+    assert outputs["explosionPng"] == "/api/v1/assets/asset-1/download"
+    assert outputs["imageProvider"] == "image2-edit"
+    assert "renderPng" not in outputs
+
+
 class FakeDbContext:
     def __enter__(self) -> object:
         return object()

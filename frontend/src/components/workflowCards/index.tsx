@@ -8,6 +8,7 @@ import {
   Palette,
   Calculator,
   Box,
+  Boxes,
   FileText,
   Package,
   Image as ImageIcon,
@@ -74,12 +75,16 @@ const CardAction: React.FC<{
   onClick: () => void;
   children: React.ReactNode;
   primary?: boolean;
-}> = ({ onClick, children, primary }) => (
+  disabled?: boolean;
+}> = ({ onClick, children, primary, disabled }) => (
   <button
     type="button"
+    disabled={disabled}
     onClick={onClick}
     className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-      primary
+      disabled
+        ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400'
+        : primary
         ? 'bg-slate-900 text-white hover:bg-slate-700'
         : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
     }`}
@@ -193,14 +198,18 @@ export const DesignSchemeCard: React.FC<{
   onPreview: () => void;
   onPromote: (action: NextStepCardData['recommendations'][number]['action']) => void;
 }> = ({ data, onPreview, onPromote }) => {
-  const thumbnails = (data.thumbnails ?? [])
+  const drawingPreview = normalizePreviewImageSource(data.drawingUrl || '');
+  const thumbnails = [
+    ...(data.thumbnails ?? []),
+    ...(drawingPreview ? [drawingPreview] : []),
+  ]
     .map((url) => normalizePreviewImageSource(url))
     .filter((url): url is string => Boolean(url));
   const labels = data.outputs
     ? [
         (data.outputs as { renderPng?: string }).renderPng ? '设计效果图' : null,
         (data.outputs as { explosionPng?: string }).explosionPng ? '爆炸分解图' : null,
-        (data.outputs as { drawingSvg?: string }).drawingSvg ? '2D 工程图' : null,
+        ((data.outputs as { drawingSvg?: string }).drawingSvg || (data.outputs as { planLine?: string }).planLine) ? '2D 平面图' : null,
       ].filter(Boolean)
     : [];
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -246,9 +255,15 @@ export const DesignSchemeCard: React.FC<{
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <CardAction onClick={onPreview} primary>查看方案预览</CardAction>
-        <CardAction onClick={() => onPromote('quote')}>生成报价</CardAction>
-        <CardAction onClick={() => onPromote('3d')}>生成3D</CardAction>
-        <CardAction onClick={() => onPromote('cad')}>生成CAD</CardAction>
+        <CardAction onClick={() => onPromote('design_sheet')}>设计图</CardAction>
+        <CardAction onClick={() => onPromote('plan_2d')}>2D平面图</CardAction>
+        <CardAction onClick={() => onPromote('render')}>宣传图</CardAction>
+        <CardAction onClick={() => onPromote('scene_fusion')}>场景融合图</CardAction>
+        <CardAction onClick={() => onPromote('explosion')}>爆炸图</CardAction>
+        <CardAction onClick={() => onPromote('3d')}>仿3D</CardAction>
+        <CardAction onClick={() => onPromote('cad')}>CAD图纸</CardAction>
+        <CardAction onClick={() => onPromote('quote')}>报价</CardAction>
+        <CardAction onClick={() => onPromote('package')}>工程包</CardAction>
       </div>
     </CardShell>
   );
@@ -329,6 +344,8 @@ export const MaterialsRequestCard: React.FC<{
     return initial;
   });
   const referenceImage = data.collected?.referenceImage;
+  const required = Boolean(data.required);
+  const canSubmit = !required || Boolean(referenceImage);
 
   const filledCount = Object.values(values).filter((v) => v && v.trim()).length;
   const totalCount = data.fields.length;
@@ -346,7 +363,7 @@ export const MaterialsRequestCard: React.FC<{
   };
 
   return (
-    <CardShell icon={<ClipboardCheck className="size-3.5" />} accent="amber" title="补充设计材料（选填）">
+    <CardShell icon={<ClipboardCheck className="size-3.5" />} accent="amber" title={required ? '上传参考图（必填）' : '补充设计材料（选填）'}>
       <input
         ref={fileRef}
         type="file"
@@ -359,7 +376,9 @@ export const MaterialsRequestCard: React.FC<{
         }}
       />
       <div className="mb-2 text-xs text-slate-500">
-        项目「{data.projectName}」已创建，可在下方补充材料（选填），留空将按默认生成：
+        {data.description || (required
+          ? `项目「${data.projectName}」需要先上传参考图，图上图任务不能跳过参考图。`
+          : `项目「${data.projectName}」已创建，可在下方补充材料（选填），留空将按默认生成：`)}
       </div>
       {referenceImage ? (
         <div className="mb-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-2">
@@ -413,19 +432,23 @@ export const MaterialsRequestCard: React.FC<{
         })}
       </div>
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[11px] text-slate-400">已填写 {filledCount}/{totalCount} 项（选填）</span>
+        <span className="text-[11px] text-slate-400">
+          已填写 {filledCount}/{totalCount} 项{required ? '（必填）' : '（选填）'}
+        </span>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
         <CardAction onClick={() => fileRef.current?.click()} primary={!referenceImage}>
           <ImageIcon className="size-3" />
           {referenceImage ? '更换参考图' : '上传参考图'}
         </CardAction>
-        <CardAction onClick={submit} primary>
+        <CardAction onClick={submit} primary disabled={!canSubmit}>
           确认并开始生成
         </CardAction>
-        <CardAction onClick={() => onAction?.('materials.skip', {})}>
-          直接生成（跳过补充）
-        </CardAction>
+        {required ? null : (
+          <CardAction onClick={() => onAction?.('materials.skip', {})}>
+            直接生成（跳过补充）
+          </CardAction>
+        )}
       </div>
     </CardShell>
   );
@@ -513,6 +536,8 @@ export const NextStepCard: React.FC<{
   const icons: Record<string, React.ReactNode> = {
     quote: <Calculator className="size-3.5" />,
     render: <ImageIcon className="size-3.5" />,
+    scene_fusion: <Layers className="size-3.5" />,
+    explosion: <Boxes className="size-3.5" />,
     '3d': <Box className="size-3.5" />,
     cad: <FileText className="size-3.5" />,
     package: <Package className="size-3.5" />,

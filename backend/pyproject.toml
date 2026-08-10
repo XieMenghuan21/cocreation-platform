@@ -3,7 +3,7 @@ name = "cocreation-platform-api"
 version = "1.0.0"
 description = "共创智能体独立平台后端 API 服务"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi==0.109.0",
     "uvicorn[standard]==0.27.0",
@@ -31,7 +31,7 @@ dependencies = [
     "cadquery-ocp-novtk==7.9.3.1.1",
     "pyrender==0.1.45",
     "trimesh",
-    "pyopengl==3.1.7",
+    "pyopengl==3.1.0",
     "langgraph",
     "langchain-openai",
 ]

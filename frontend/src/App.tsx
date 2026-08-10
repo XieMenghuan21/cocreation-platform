@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   runLogout,
@@ -17,11 +17,14 @@ import {
   normalizeWorkspacePrimaryView,
   type WorkspacePrimaryView,
 } from './components/workspace/workspaceResourceTypes';
+import {
+  buildProjectLinkedPath,
+  buildWorkspaceViewPath,
+} from './components/workspace/workspaceViewNavigation';
 
 const CoCreationLogin = lazy(() => import('./components/CoCreationLogin').then((module) => ({ default: module.CoCreationLogin })));
 const LandingPage = lazy(() => import('./components/LandingPage').then((module) => ({ default: module.LandingPage })));
 const GptWorkspace = lazy(() => import('./components/GptWorkspace').then((module) => ({ default: module.GptWorkspace })));
-const WorkspaceShell = lazy(() => import('./components/workspace/WorkspaceShell').then((module) => ({ default: module.WorkspaceShell })));
 
 interface AuthState {
   user: SessionUser | null;
@@ -98,7 +101,6 @@ const LoginRoute: React.FC<{
  * /workspace?view=assets             Workspace 内 AI 资产中心
  * /workspace?view=versions           Workspace 内版本中心
  * /workspace?view=quotes             Workspace 内报价中心
- * /workspace?graph=1                 仅保留给 Workspace Graph 实验，不接管生产入口
  *
  * 旧 /projects /assets /quotes 仅做兼容跳转，不再作为产品一级页面。
  */
@@ -224,11 +226,6 @@ const StandaloneShell: React.FC<{
 
   const pathConversationId = (location.pathname.match(/^\/workspace\/([^/]+)/) || [])[1] || null;
   const activeView = normalizeWorkspacePrimaryView(searchParams.get('view'));
-  const graphDefault = import.meta.env.VITE_WORKSPACE_GRAPH_DEFAULT === '1';
-  const isGraphMode = activeView === 'chat' && (
-    searchParams.get('graph') === '1'
-    || (graphDefault && searchParams.get('legacy') !== '1')
-  );
   const projectId = searchParams.get('project');
   const projectName = searchParams.get('name');
   const initialPrompt = searchParams.get('prompt');
@@ -236,23 +233,16 @@ const StandaloneShell: React.FC<{
   const initialConversationId = searchParams.get('cid') || pathConversationId;
   const resourceProjectId = searchParams.get('archiveProject');
 
-  const graphConversationId = useMemo(
-    () => (isGraphMode ? pathConversationId ?? undefined : undefined),
-    [isGraphMode, pathConversationId],
-  );
-
   const setWorkspaceView = useCallback((next: WorkspacePrimaryView) => {
-    const params = new URLSearchParams(searchParams);
-    if (next === 'chat') {
-      params.delete('view');
-      params.delete('archiveProject');
-    } else {
-      params.set('view', next);
-      if (next !== 'projects') params.delete('archiveProject');
-    }
-    // 保留 graph=1：用户在 Graph 对话与资源页之间切换时不能偷偷换回另一套工作流。
-    setSearchParams(params, { replace: false });
-  }, [searchParams, setSearchParams]);
+    navigate(
+      buildWorkspaceViewPath({
+        pathname: location.pathname,
+        search: location.search,
+        next,
+      }),
+      { replace: false },
+    );
+  }, [location.pathname, location.search, navigate]);
 
   const handleNewChat = useCallback(() => {
     setNewChatKey((prev) => prev + 1);
@@ -267,14 +257,16 @@ const StandaloneShell: React.FC<{
   }, [initialPrompt, searchParams, setSearchParams]);
 
   const handleProjectLinked = useCallback((linkedProjectId: string, linkedProjectName: string) => {
-    const params = new URLSearchParams(searchParams);
-    params.set('project', linkedProjectId);
-    if (linkedProjectName) params.set('name', linkedProjectName);
-    params.delete('prompt');
-    params.delete('view');
-    params.delete('archiveProject');
-    setSearchParams(params, { replace: true });
-  }, [searchParams, setSearchParams]);
+    navigate(
+      buildProjectLinkedPath({
+        pathname: location.pathname,
+        search: location.search,
+        projectId: linkedProjectId,
+        projectName: linkedProjectName,
+      }),
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
 
   const handleOpenConversation = useCallback((conversationId: string, title: string) => {
     const params = new URLSearchParams();
@@ -299,7 +291,7 @@ const StandaloneShell: React.FC<{
   return (
     <div className="flex h-screen overflow-hidden bg-[#f5f5f4]">
       <WorkspaceNavigation
-        activeView={isGraphMode ? 'chat' : activeView}
+        activeView={activeView}
         userLabel={userLabel}
         onSelectView={setWorkspaceView}
         onNewChat={handleNewChat}
@@ -323,55 +315,35 @@ const StandaloneShell: React.FC<{
 
         <div className="relative flex h-full min-h-0 flex-1 overflow-hidden">
           <Suspense fallback={<SurfaceLoader label="正在加载工作台" />}>
-            {isGraphMode ? (
-              <WorkspaceShell
-                key={`graph-${newChatKey}`}
-                conversationId={graphConversationId}
+            {/* GptWorkspace 始终保持挂载。切换资源页时只隐藏，避免正在运行的轮询/生成被卸载。 */}
+            <div className={activeView === 'chat' ? 'flex h-full min-w-0 flex-1' : 'hidden'}>
+              <GptWorkspace
+                key={`chat-${newChatKey}`}
                 initialPrompt={initialPrompt}
-                onConversationChanged={(cid, title) => {
-                  const params = new URLSearchParams({ graph: '1' });
-                  if (title) params.set('name', title);
-                  navigate(`/workspace/${cid}?${params.toString()}`, { replace: true });
-                }}
-                onNewChat={() => {
-                  setNewChatKey((prev) => prev + 1);
-                  navigate('/workspace?graph=1', { replace: true });
-                }}
+                projectId={projectId}
+                projectName={projectName}
+                initialPreview={initialPreview}
+                initialConversationId={initialConversationId}
+                onProjectLinked={handleProjectLinked}
+                onNavigateHome={() => navigate('/')}
                 externalResourceCenter
               />
-            ) : (
-              <>
-                {/* GptWorkspace 始终保持挂载。切换资源页时只隐藏，避免正在运行的轮询/生成被卸载。 */}
-                <div className={activeView === 'chat' ? 'flex h-full min-w-0 flex-1' : 'hidden'}>
-                  <GptWorkspace
-                    key={`chat-${newChatKey}`}
-                    initialPrompt={initialPrompt}
-                    projectId={projectId}
-                    projectName={projectName}
-                    initialPreview={initialPreview}
-                    initialConversationId={initialConversationId}
-                    onProjectLinked={handleProjectLinked}
-                    onNavigateHome={() => navigate('/')}
-                    externalResourceCenter
-                  />
-                </div>
+            </div>
 
-                {activeView !== 'chat' ? (
-                  <WorkspaceResourceView
-                    view={activeView}
-                    selectedProjectId={resourceProjectId}
-                    onBackToConversation={() => setWorkspaceView('chat')}
-                    onOpenProject={(project) => handleOpenResourceProject(project.id)}
-                    onClearProject={handleClearResourceProject}
-                    onOpenConversation={handleOpenConversation}
-                  />
-                ) : null}
-              </>
-            )}
+            {activeView !== 'chat' ? (
+              <WorkspaceResourceView
+                view={activeView}
+                selectedProjectId={resourceProjectId}
+                onBackToConversation={() => setWorkspaceView('chat')}
+                onOpenProject={(project) => handleOpenResourceProject(project.id)}
+                onClearProject={handleClearResourceProject}
+                onOpenConversation={handleOpenConversation}
+              />
+            ) : null}
           </Suspense>
         </div>
 
-        {!isGraphMode && activeView === 'chat' && projectId ? (
+        {activeView === 'chat' && projectId ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-2">
             <div className="min-w-0 flex items-center gap-2">
               <span className="truncate text-xs font-medium text-slate-600">

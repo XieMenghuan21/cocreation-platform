@@ -8,16 +8,16 @@ import {
   CheckCircle2,
   XCircle,
   X,
-  Box,
   Boxes,
   PanelRightClose,
   PanelRight,
   PanelLeft,
   FileText,
-  Calculator,
   Paperclip,
   Mic,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { ResizablePanel } from './ResizablePanel';
 import PreviewImage from './PreviewImage';
@@ -32,8 +32,8 @@ import {
 import { agentService, type IntentAnalysis } from '../services/agentService';
 import { normalizePreviewImageSource } from '../utils/previewImage';
 import { getCadAiOutputValue } from './CoCreationAgentWorkspace.helpers';
+import type { WorkflowCard } from './workflowCards/types';
 import { WorkflowCardView } from './workflowCards';
-import type { NextStepCardData, WorkflowCard } from './workflowCards/types';
 import { cocreationHistoryService } from '../services/cocreationHistoryService';
 import { getVersionsForProject, normalizeVersionSnapshots } from './CoCreationAgentWorkspace.helpers';
 import type { VersionSnapshot } from './CoCreationAgentWorkspace.types';
@@ -55,23 +55,44 @@ interface ChatMessage {
   cards?: WorkflowCard[];
 }
 
-type PreviewTab = 'image' | '3d' | 'cad' | 'quote';
-
 type ExecLevel = 'fast' | 'standard' | 'deep';
 
-const PREVIEW_TABS: Array<{ id: PreviewTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { id: 'image', label: '图片', icon: ImageIcon },
-  { id: '3d', label: '3D', icon: Box },
-  { id: 'cad', label: 'CAD', icon: FileText },
-  { id: 'quote', label: '报价', icon: Calculator },
-];
+type WorkflowActionKind =
+  | 'design_sheet'
+  | 'plan_2d'
+  | 'render'
+  | 'scene_fusion'
+  | 'explosion'
+  | '3d'
+  | 'cad'
+  | 'quote'
+  | 'package';
 
-const TAB_PLACEHOLDER: Record<PreviewTab, { title: string; desc: string }> = {
-  image: { title: '暂无图片预览', desc: '生成设计方案后自动显示' },
-  '3d': { title: '暂无 3D 模型预览', desc: '生成设计方案后可推进到 3D' },
-  cad: { title: '暂无 CAD 图纸预览', desc: '生成设计方案后可推进到 CAD' },
-  quote: { title: '暂无报价信息', desc: '生成设计方案后可查看估算报价' },
+const IMAGE_EDIT_ACTIONS = new Set<WorkflowActionKind>(['plan_2d', 'render', 'scene_fusion', 'explosion', '3d']);
+
+const ACTION_LABELS: Record<WorkflowActionKind, string> = {
+  design_sheet: '设计图',
+  plan_2d: '2D平面图',
+  render: '宣传图',
+  scene_fusion: '场景融合图',
+  explosion: '爆炸图',
+  '3d': '仿3D效果图',
+  cad: 'CAD图纸',
+  quote: '报价',
+  package: '工程包',
 };
+
+const NEXT_STEP_RECOMMENDATIONS = [
+  { label: '设计图', agent: 'design_agent', icon: 'PencilLine', action: 'design_sheet' as const },
+  { label: '2D平面图', agent: 'plan_agent', icon: 'FileText', action: 'plan_2d' as const },
+  { label: '宣传图', agent: 'render', icon: 'ImageIcon', action: 'render' as const },
+  { label: '场景融合图', agent: 'scene_fusion', icon: 'Layers', action: 'scene_fusion' as const },
+  { label: '爆炸图', agent: 'explosion', icon: 'Boxes', action: 'explosion' as const },
+  { label: '仿3D效果图', agent: '3d', icon: 'Box', action: '3d' as const },
+  { label: 'CAD 图纸', agent: 'cad', icon: 'FileText', action: 'cad' as const },
+  { label: '报价', agent: 'quote', icon: 'Calculator', action: 'quote' as const },
+  { label: '工程包', agent: 'package', icon: 'Package', action: 'package' as const },
+];
 
 const EXEC_LEVELS: Array<{ id: ExecLevel; label: string }> = [
   { id: 'fast', label: '快速' },
@@ -97,6 +118,57 @@ const nextId = (() => {
   return () => `chat-${Date.now()}-${(counter += 1)}`;
 })();
 
+const MessageCardStack: React.FC<{
+  cards: WorkflowCard[];
+  onAction: (card: WorkflowCard, action: string, extra?: Record<string, unknown>) => void;
+}> = ({ cards, onAction }) => {
+  const [index, setIndex] = useState(0);
+  const safeIndex = Math.min(index, Math.max(cards.length - 1, 0));
+  const activeCard = cards[safeIndex];
+
+  useEffect(() => {
+    if (index > cards.length - 1) setIndex(Math.max(cards.length - 1, 0));
+  }, [cards.length, index]);
+
+  if (!activeCard) return null;
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      {cards.length > 1 ? (
+        <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+          <button
+            type="button"
+            disabled={safeIndex === 0}
+            onClick={() => setIndex((prev) => Math.max(prev - 1, 0))}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+          >
+            <ChevronLeft className="size-3" />
+            上一步
+          </button>
+          <span className="text-[11px] font-medium text-slate-400">
+            {safeIndex + 1} / {cards.length}
+          </span>
+          <button
+            type="button"
+            disabled={safeIndex >= cards.length - 1}
+            onClick={() => setIndex((prev) => Math.min(prev + 1, cards.length - 1))}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+          >
+            下一步
+            <ChevronRight className="size-3" />
+          </button>
+        </div>
+      ) : null}
+      <div className="[&>div]:rounded-none [&>div]:border-0 [&>div]:shadow-none">
+        <WorkflowCardView
+          card={activeCard}
+          onAction={(action, extra) => onAction(activeCard, action, extra)}
+        />
+      </div>
+    </div>
+  );
+};
+
 export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   initialPrompt,
   projectId,
@@ -113,8 +185,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   const sendingRef = useRef(false);
   const [chatWidth, setChatWidth] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
-  const [previewTab, setPreviewTab] = useState<PreviewTab>('image');
-  const [latestOutputs, setLatestOutputs] = useState<CadAiTaskStatus['outputs'] | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [previewKind, setPreviewKind] = useState<'image' | 'stl' | 'plan'>('image');
   const [execLevel, setExecLevel] = useState<ExecLevel>('standard');
@@ -287,7 +357,9 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           cards,
         };
       });
-      if (built.length > 0 && !sendingRef.current) setMessages(built);
+      if (built.length > 0 && !sendingRef.current) {
+        setMessages(built);
+      }
 
       const projectCard = built
         .flatMap((message) => message.cards ?? [])
@@ -342,7 +414,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
   const applyMessageToPreview = useCallback((message: ChatMessage) => {
     const outputs = message.outputs || EMPTY_OUTPUTS;
-    setLatestOutputs(outputs);
 
     const renderUrl = normalizePreviewImageSource(
       getCadAiOutputValue(outputs, ['renderPng', 'enhancedImage']),
@@ -350,21 +421,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     if (renderUrl) {
       setPreviewSource(renderUrl);
       setPreviewKind('image');
-      setPreviewTab('image');
       return true;
     }
-    const drawingSvg = getCadAiOutputValue(outputs, ['drawingSvg']);
+    const drawingSvg = getCadAiOutputValue(outputs, ['planLine', 'planLineSvg', 'drawingSvg', 'drawingDxf']);
     if (drawingSvg) {
       setPreviewSource(normalizePreviewImageSource(drawingSvg));
       setPreviewKind('image');
-      setPreviewTab('cad');
-      return true;
-    }
-    const modelStl = getCadAiOutputValue(outputs, ['modelStl', 'modelDownloadUrl']);
-    if (modelStl) {
-      setPreviewSource(modelStl);
-      setPreviewKind('stl');
-      setPreviewTab('3d');
       return true;
     }
     return false;
@@ -372,6 +434,50 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
   const patchMessage = useCallback((id: string, patch: Partial<ChatMessage>) => {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }, []);
+
+  const appendReferenceRequiredMessage = useCallback((actionKind: WorkflowActionKind) => {
+    const label = ACTION_LABELS[actionKind];
+    const msg: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      text: `${label}必须基于已有设计图或参考图做图片编辑。你可以先上传参考图；如果现在没有，就先生成「设计图」。`,
+      status: 'completed',
+      cards: [
+        {
+          id: `reference-required-${Date.now()}`,
+          type: 'materials_request',
+          data: {
+            projectName: projectCtxRef.current?.projectName || '当前项目',
+            fields: [
+              {
+                key: 'referenceImage',
+                label: '参考图',
+                hint: '上传设计图、商品图、草图或竞品参考图后，再生成2D平面图/宣传图/场景融合/爆炸图/仿3D。',
+                collected: Boolean(collectedMaterialsRef.current.referenceAssetId),
+              },
+            ],
+            collected: collectedMaterialsRef.current.referenceImage
+              ? { referenceImage: collectedMaterialsRef.current.referenceImage }
+              : {},
+            required: true,
+            description: `图上图任务必须先上传参考图。没有参考图时，请先生成「设计图」，再继续做${label}。`,
+          },
+        },
+        {
+          id: `reference-required-next-${Date.now()}`,
+          type: 'next_step',
+          data: {
+            current: 'reference_required',
+            recommendations: [
+              { label: '先生成设计图', agent: 'design_agent', icon: 'PencilLine', action: 'design_sheet' },
+            ],
+          },
+        },
+      ],
+    };
+    setMessages((prev) => [...prev, msg]);
+    void persistMessage('assistant', msg);
   }, []);
 
   const buildWorkflowOptions = useCallback((intent: IntentAnalysis | null) => {
@@ -422,12 +528,8 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       options.generateDrawing = true;
       options.generateRender = true;
       options.generateExplosion = true;
-      options.generateCad = true;
-      options.generateThreePreview = true;
-    }
-    if (options.generateExplosion && options.enhanceImage) {
-      options.enhanceImage = false;
-      options.generateRender = false;
+      options.generateCad = false;
+      options.generateThreePreview = false;
     }
     return options;
   }, [execLevel]);
@@ -499,6 +601,21 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       }),
     );
   }, []);
+
+  const promoteOutputsToReference = useCallback((outputs: CadAiTaskStatus['outputs'] | null | undefined) => {
+    if (!outputs) return;
+    const referenceImage = getCadAiOutputValue(outputs, ['renderPng', 'enhancedImage', 'explosionPng']);
+    const referenceAssetId = getCadAiOutputValue(outputs, ['renderPngAssetId', 'enhancedImageAssetId', 'explosionPngAssetId']);
+    if (!referenceImage || !referenceAssetId) return;
+    const nextCollected = {
+      ...collectedMaterialsRef.current,
+      referenceImage,
+      referenceAssetId,
+    };
+    collectedMaterialsRef.current = nextCollected;
+    setCollectedMaterials(nextCollected);
+    updateMaterialsCard(nextCollected);
+  }, [updateMaterialsCard]);
 
   const handleFileUpload = async (file: File) => {
     if (uploading) return;
@@ -729,31 +846,61 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     if (!ctx) return;
     const intent = ctx.intent;
     const needsMaterials = intent?.needsMaterials ?? true;
+    const needsReferenceImage = Boolean(
+      intent?.intent === 'propaganda'
+      && (intent.suggestedOptions.generateRender || intent.suggestedOptions.generateExplosion || intent.suggestedOptions.enhanceImage)
+      && !collectedMaterialsRef.current.referenceAssetId,
+    );
 
     const cardsRef: WorkflowCard[] = [];
 
-    if (needsMaterials) {
-      const materialFields = [
-        { key: 'referenceImage', label: '参考图', hint: '可上传类似款式或风格参考图' },
-        { key: 'material', label: '材质', hint: '金属 / 木材 / 塑料 / 陶瓷 / 玻璃等' },
-        { key: 'dimension', label: '尺寸', hint: '长宽高 / 重量 / 体积' },
-        { key: 'budget', label: '预算', hint: '预期造价范围' },
-        { key: 'scene', label: '使用场景', hint: '家居 / 办公 / 户外 / 工业等' },
-        { key: 'style', label: '风格', hint: '简约 / 科技感 / 复古 / 高端等' },
-        { key: 'feature', label: '特殊功能', hint: '必需的功能或特性' },
-        { key: 'brand', label: '品牌规范', hint: '需要遵循的品牌调性或规范' },
-      ];
+    if (needsMaterials || needsReferenceImage) {
+      const materialFields = needsReferenceImage
+        ? [
+            {
+              key: 'referenceImage',
+              label: '参考图',
+              hint: '宣传图、场景融合图、爆炸图、仿3D都必须上传设计图/商品图/草图后再生成。',
+            },
+          ]
+        : [
+            { key: 'referenceImage', label: '参考图', hint: '可上传类似款式或风格参考图' },
+            { key: 'outputType', label: '输出类型', hint: '设计图（多视图）/ 2D平面图（基于原图多视图工程图）/ 宣传图 / 爆炸图' },
+            { key: 'material', label: '材质', hint: '金属 / 木材 / 塑料 / 陶瓷 / 玻璃等' },
+            { key: 'dimension', label: '尺寸', hint: '长宽高 / 重量 / 体积' },
+            { key: 'budget', label: '预算', hint: '预期造价范围' },
+            { key: 'scene', label: '使用场景', hint: '家居 / 办公 / 户外 / 工业等' },
+            { key: 'style', label: '风格', hint: '简约 / 科技感 / 复古 / 高端等' },
+            { key: 'feature', label: '特殊功能', hint: '必需的功能或特性' },
+            { key: 'brand', label: '品牌规范', hint: '需要遵循的品牌调性或规范' },
+          ];
       setMaterialQuestions(materialFields.map((f) => `${f.label}：${f.hint}`));
-      setCollectedMaterials({});
+      setCollectedMaterials(collectedMaterialsRef.current);
       cardsRef.push({
         id: `${ctx.messageId}-materials`,
         type: 'materials_request',
         data: {
           projectName: ctx.projectName,
           fields: materialFields.map((f) => ({ ...f, collected: false })),
-          collected: {},
+          collected: collectedMaterialsRef.current,
+          required: needsReferenceImage,
+          description: needsReferenceImage
+            ? `图上图任务必须先上传参考图。没有参考图时，请先生成「设计图」，再继续做2D平面图、宣传图、场景融合图、爆炸图或仿3D。`
+            : undefined,
         },
       });
+      if (needsReferenceImage) {
+        cardsRef.push({
+          id: `${ctx.messageId}-reference-next`,
+          type: 'next_step',
+          data: {
+            current: 'reference_required',
+            recommendations: [
+              { label: '没有图，先生成设计图', agent: 'design_agent', icon: 'PencilLine', action: 'design_sheet' },
+            ],
+          },
+        });
+      }
     } else {
       cardsRef.push({
         id: `${ctx.messageId}-confirm`,
@@ -767,13 +914,15 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
 
     const actionHint = needsMaterials
       ? '请补充设计材料（可逐条回复，也可直接描述）。'
+      : needsReferenceImage
+        ? '这个任务需要图上图，请先上传参考图；如果没有参考图，可以先生成设计图。'
       : intent?.intent === 'propaganda'
         ? '已识别为宣发需求，将基于参考图生成宣传素材。'
         : '已识别为生产需求，将生成 CAD/图纸。';
 
     patchMessage(ctx.messageId, {
       text: `项目「${ctx.projectName}」已确认，${actionHint}`,
-      cards: cardsRef,
+      cards: cardsRef.length > 0 ? cardsRef : undefined,
     });
     pendingWorkflowRef.current = {
       messageId: ctx.messageId,
@@ -887,19 +1036,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       text: messageText,
       status: 'completed',
       projectId: ctx.projectId,
-      cards: [
-        requirementCard,
-        {
-          id: `${assistantMessage.id}-next`,
-          type: 'next_step',
-          data: {
-            current: 'materials_collected',
-            recommendations: [
-              { label: '确认需求，开始生成', agent: 'confirm', icon: '✅', action: 'confirm' },
-            ],
-          },
-        },
-      ],
+      cards: [requirementCard],
     };
 
     updateMaterialsCard(nextCollected);
@@ -940,13 +1077,23 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
     const { text, intent, projectId: projectIdValue } = ctx;
     workflowRunningRef.current = true;
 
-    const statusMessage: ChatMessage = {
-      id: nextId(),
+    const msgId = nextId();
+    const statusId = `workflow-status-${Date.now()}`;
+
+    // 创建一条带状态卡片的助理消息
+    const statusCard: WorkflowCard = {
+      id: `${statusId}`,
+      type: 'status',
+      data: { agent: 'design_agent', task: '生成设计方案', progress: 5, stage: '已提交', estimatedRemaining: '约 1-2 分钟' },
+    };
+    const runMsg: ChatMessage = {
+      id: msgId,
       role: 'assistant',
       text: '正在生成设计方案…',
       status: 'running',
+      cards: [statusCard],
     };
-    setMessages((prev) => [...prev, statusMessage]);
+    setMessages((prev) => [...prev, runMsg]);
 
     try {
       const referenceAssetId = collectedMaterialsRef.current.referenceAssetId;
@@ -964,12 +1111,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       };
 
       const task = await createIndustrialDesignWorkflow(payload);
-      const cardsRef: WorkflowCard[] = [{
-        id: `${statusMessage.id}-status`,
+      const updatedStatus: WorkflowCard = {
+        id: `${statusId}`,
         type: 'status',
         data: { agent: 'design_agent', task: '生成设计方案', progress: 5, stage: task.currentStep || '已提交', estimatedRemaining: '约 1-2 分钟' },
-      }];
-      patchMessage(statusMessage.id, { taskId: task.taskId, projectId: task.projectId || projectIdValue || null, cards: [...cardsRef] });
+      };
+      patchMessage(msgId, { cards: [updatedStatus] });
 
       const maxPoll = 120;
       let current = task;
@@ -977,12 +1124,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         if (current.status === 'completed' || current.status === 'failed') break;
         await new Promise((resolve) => setTimeout(resolve, 3000));
         current = await getIndustrialDesignWorkflowTask(task.taskId);
-        cardsRef[0] = {
-          id: `${statusMessage.id}-status`,
+        const pollingStatus: WorkflowCard = {
+          id: `${statusId}`,
           type: 'status',
           data: { agent: 'design_agent', task: '生成设计方案', progress: current.progress, stage: current.currentStep || '执行中', estimatedRemaining: null },
         };
-        patchMessage(statusMessage.id, { cards: [...cardsRef] });
+        patchMessage(msgId, { cards: [pollingStatus] });
       }
 
       if (current.status === 'failed') throw new Error(current.error || '方案生成失败');
@@ -992,45 +1139,83 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       const drawingUrl = getCadAiOutputValue(outputs, ['drawingSvg']);
       const explosionUrl = getCadAiOutputValue(outputs, ['explosionPng']);
       const schemeThumbnails = [renderUrl, explosionUrl, drawingUrl].filter((url): url is string => Boolean(url));
-      const resultCards: WorkflowCard[] = [
-        { id: `${statusMessage.id}-scheme`, type: 'design_scheme', data: { schemeId: `${statusMessage.id}-scheme`, name: `${intent?.projectName || '设计方案'} · 方案A`, thumbnails: schemeThumbnails, materials: [], estimatedPrice: null, renderUrl: renderUrl || null, drawingUrl: drawingUrl || null, outputs } },
-        { id: `${statusMessage.id}-next`, type: 'next_step', data: { current: 'design_completed', recommendations: [ { label: '生成报价', agent: 'quote_agent', icon: '💰', action: 'quote' }, { label: '生成宣传图', agent: 'render_agent', icon: '🖼️', action: 'render' }, { label: '生成 3D 模型', agent: '3d_agent', icon: '📦', action: '3d' }, { label: '生成 CAD 图纸', agent: 'cad_agent', icon: '📐', action: 'cad' }, { label: '生成工程包', agent: 'production_agent', icon: '📋', action: 'package' } ] } },
-      ];
+      if (schemeThumbnails.length === 0) {
+        throw new Error('设计方案执行完成，但没有返回可预览的图片或图纸结果。');
+      }
 
-      const done: ChatMessage = {
-        id: statusMessage.id, role: 'assistant',
-        text: renderUrl || drawingUrl ? '方案已生成，点击下方卡片查看预览。' : '方案已生成。',
-        status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId,
-        outputs, cards: resultCards,
+      // 结果卡片 + 后续步骤卡片
+      const resultCard: WorkflowCard = {
+        id: `${statusId}-scheme`,
+        type: 'design_scheme',
+        data: {
+          schemeId: `${statusId}-scheme`,
+          name: `${intent?.projectName || '设计方案'} · 方案A`,
+          thumbnails: schemeThumbnails,
+          materials: [],
+          estimatedPrice: null,
+          renderUrl: renderUrl || null,
+          drawingUrl: drawingUrl || null,
+          outputs,
+        },
       };
-      setMessages((prev) => prev.map((m) => (m.id === statusMessage.id ? done : m)));
-      applyMessageToPreview(done);
-      if (done.outputs) setShowPreview(true);
-      if (done.projectId && onProjectLinked) onProjectLinked(done.projectId, projectCtxRef.current?.projectName || projectName || done.projectId);
+      // 更新消息内卡片：只保留结果卡。后续操作在结果卡底部出现一次，避免重复。
+      patchMessage(msgId, {
+        status: 'completed',
+        text: renderUrl || drawingUrl ? '方案已生成，可继续推进后续步骤。' : '方案已生成。',
+        cards: [resultCard],
+        taskId: current.taskId,
+        projectId: current.projectId || projectIdValue,
+        versionId: current.versionId,
+        outputs,
+      });
+      promoteOutputsToReference(outputs);
+      applyMessageToPreview({ id: msgId, role: 'assistant', text: '方案已生成', status: 'completed', outputs } as ChatMessage);
+      if (outputs) setShowPreview(true);
+      if ((current.projectId || projectIdValue) && onProjectLinked) onProjectLinked(current.projectId || projectIdValue, projectCtxRef.current?.projectName || projectName || current.projectId || projectIdValue);
       void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-        sourceKey: `legacy-render:${current.taskId || statusMessage.id}`,
+        sourceKey: `legacy-render:${current.taskId || statusId}`,
         type: 'render',
         status: 'completed',
         title: `${projectCtxRef.current?.projectName || projectName || '设计项目'} · 设计结果`,
-        summary: done.text,
-        projectId: done.projectId || projectIdValue || null,
+        summary: '方案已生成',
+        projectId: current.projectId || projectIdValue || null,
         taskId: current.taskId,
         versionId: current.versionId,
-        parentSourceKey: `legacy-project:${done.projectId || projectIdValue}`,
+        parentSourceKey: `legacy-project:${current.projectId || projectIdValue}`,
         outputData: { ...outputs },
         uiData: { projection: 'design_scheme_card' },
       });
-      void persistMessage('assistant', done);
+      void persistMessage('assistant', { id: msgId, role: 'assistant', text: '方案已生成', status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId, outputs, cards: [resultCard] } as ChatMessage);
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
-      patchMessage(statusMessage.id, { status: 'failed', text: message, error: message });
-      void persistMessage('assistant', { id: statusMessage.id, role: 'assistant', text: message, status: 'failed', error: message } as ChatMessage);
+      const errorCard: WorkflowCard = {
+        id: `${statusId}-error`,
+        type: 'status',
+        data: { agent: 'design_agent', task: '生成失败', progress: 0, stage: message, estimatedRemaining: null },
+      };
+      patchMessage(msgId, { status: 'failed', text: message, error: message, cards: [errorCard] });
+      void persistMessage('assistant', { id: msgId, role: 'assistant', text: message, status: 'failed', error: message } as ChatMessage);
     } finally { workflowRunningRef.current = false; }
   };
   runWorkflowRef.current = runWorkflow;
 
   const showPromptCard = async (ctx: NonNullable<typeof pendingWorkflowRef.current>) => {
-    patchMessage(ctx.messageId, { text: '正在优化生成提示词…', status: 'running' });
+    const msgId = nextId();
+
+    // 创建独立消息，附带状态卡片
+    const statusCard: WorkflowCard = {
+      id: `prompt-status-${Date.now()}`,
+      type: 'status',
+      data: { agent: 'design_agent', task: '优化提示词', progress: 30, stage: '优化中', estimatedRemaining: '约 10 秒' },
+    };
+    const msg: ChatMessage = {
+      id: msgId,
+      role: 'assistant',
+      text: '正在优化生成提示词…',
+      status: 'running',
+      cards: [statusCard],
+    };
+    setMessages((prev) => [...prev, msg]);
 
     try {
       const mats = collectedMaterialsRef.current;
@@ -1048,65 +1233,153 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       const rawPrompt = parts.join('；') || ctx.text;
       const result = await aggregationWorkbenchService.optimizePrompt({ prompt: rawPrompt, model: null });
       const optimizedPrompt = result.data.optimizedPrompt || result.data.finalPrompt || rawPrompt;
-      pendingWorkflowRef.current = { ...ctx, text: optimizedPrompt };
+      pendingWorkflowRef.current = { ...ctx, text: optimizedPrompt, messageId: msgId };
 
-      patchMessage(ctx.messageId, {
+      // 替换为提示词确认卡
+      const promptCard: WorkflowCard = {
+        id: `${msgId}-prompt`,
+        type: 'prompt_confirm',
+        data: { original: ctx.text, optimized: optimizedPrompt, references: result.data.references || [] },
+      };
+      patchMessage(msgId, {
         status: 'completed',
         text: '提示词已优化，可在卡片中确认或修改。',
-        cards: [{ id: `${ctx.messageId}-prompt`, type: 'prompt_confirm', data: { original: ctx.text, optimized: optimizedPrompt, references: result.data.references || [] } }],
+        cards: [promptCard],
       });
     } catch {
-      pendingWorkflowRef.current = { ...ctx, text: ctx.text };
-      patchMessage(ctx.messageId, {
+      pendingWorkflowRef.current = { ...ctx, text: ctx.text, messageId: msgId };
+      const promptCard: WorkflowCard = {
+        id: `${msgId}-prompt`,
+        type: 'prompt_confirm',
+        data: { original: ctx.text, optimized: ctx.text, references: [] },
+      };
+      patchMessage(msgId, {
         status: 'completed',
         text: '提示词准备就绪，可在卡片中确认或修改。',
-        cards: [{ id: `${ctx.messageId}-prompt`, type: 'prompt_confirm', data: { original: ctx.text, optimized: ctx.text, references: [] } }],
+        cards: [promptCard],
       });
     }
   };
 
   const triggerNextWorkflow = async (
-    actionKind: string,
+    actionKind: WorkflowActionKind,
     intent: IntentAnalysis | null,
     projectIdValue: string,
   ) => {
+    if (IMAGE_EDIT_ACTIONS.has(actionKind) && !collectedMaterialsRef.current.referenceAssetId) {
+      appendReferenceRequiredMessage(actionKind);
+      return;
+    }
     const nextOptions = buildWorkflowOptions(intent);
     const intentText = intent?.requirementText || '';
-    if (actionKind === '3d' || actionKind === 'cad') {
-      nextOptions.generateCad = true;
-      nextOptions.generateThreePreview = actionKind === '3d';
+    if (actionKind === 'design_sheet') {
+      nextOptions.generateCad = false;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generateDrawing = true;
+      nextOptions.generateRender = false;
+      nextOptions.generateExplosion = false;
+      nextOptions.enhanceImage = false;
+      nextOptions.generatePlanLine = false;
+    } else if (actionKind === 'plan_2d') {
+      nextOptions.generateCad = false;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateRender = true;
+      nextOptions.generateExplosion = false;
+      nextOptions.enhanceImage = true;
+      nextOptions.generatePlanLine = false;
+    } else if (actionKind === '3d') {
+      nextOptions.generateCad = false;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateRender = true;
+      nextOptions.generateExplosion = false;
+      nextOptions.enhanceImage = true;
+      nextOptions.generatePlanLine = false;
+    } else if (actionKind === 'cad') {
+      nextOptions.generateCad = false;
+      nextOptions.generateThreePreview = false;
       nextOptions.generateDrawing = false;
       nextOptions.generateRender = false;
       nextOptions.generateExplosion = false;
       nextOptions.enhanceImage = false;
+      nextOptions.generatePlanLine = true;
     } else if (actionKind === 'render') {
       nextOptions.generateRender = true;
       nextOptions.enhanceImage = true;
       nextOptions.generateDrawing = false;
       nextOptions.generateCad = false;
       nextOptions.generateExplosion = false;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generatePlanLine = false;
+    } else if (actionKind === 'scene_fusion') {
+      nextOptions.enhanceImage = true;
+      nextOptions.generateRender = true;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateCad = false;
+      nextOptions.generateExplosion = false;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generatePlanLine = false;
+    } else if (actionKind === 'explosion') {
+      nextOptions.generateExplosion = true;
+      nextOptions.generateRender = false;
+      nextOptions.generateDrawing = false;
+      nextOptions.generateCad = false;
+      nextOptions.enhanceImage = true;
+      nextOptions.generateThreePreview = false;
+      nextOptions.generatePlanLine = false;
     } else if (actionKind === 'quote') {
-      nextOptions.generateCad = true;
+      nextOptions.generateCad = false;
       nextOptions.generateDrawing = false;
       nextOptions.generateRender = false;
       nextOptions.generateExplosion = false;
+      nextOptions.generateThreePreview = false;
     }
 
-    const statusMessage: ChatMessage = {
-      id: nextId(),
-      role: 'assistant',
-      text: `正在处理「${actionKind === '3d' ? '3D模型' : actionKind === 'cad' ? 'CAD图纸' : actionKind === 'render' ? '宣传图' : '报价'}」…`,
-      status: 'running',
+    const actionLabel = ACTION_LABELS[actionKind] || actionKind;
+
+    // 创建一条带状态卡片的助理消息
+    const msgId = nextId();
+    const statusId = `next-status-${Date.now()}`;
+    const statusCard: WorkflowCard = {
+      id: statusId,
+      type: 'status',
+      data: { agent: 'design_agent', task: actionLabel, progress: 5, stage: '已提交', estimatedRemaining: '约 1-3 分钟' },
     };
-    setMessages((prev) => [...prev, statusMessage]);
+    const runMsg: ChatMessage = {
+      id: msgId,
+      role: 'assistant',
+      text: `正在生成${actionLabel}…`,
+      status: 'running',
+      cards: [statusCard],
+    };
+    setMessages((prev) => [...prev, runMsg]);
 
     try {
+      const imageEditModeMap: Record<string, string> = {
+        plan_2d: 'plan_2d',
+        render: 'poster',
+        scene_fusion: 'scene_fusion',
+        explosion: 'exploded',
+        '3d': 'fake_3d',
+      };
       const payload: IndustrialDesignWorkflowPayload = {
         inputType: 'text',
-        text: intentText,
+        text: actionKind === 'design_sheet'
+          ? `${intentText || intent?.projectName || '产品'}。生成工业设计图：必须包含正视图、后视图、左视图、右视图、上视图、下视图、尺寸标注、材质标注和局部细节，不是单张产品摄影。`
+          : actionKind === 'plan_2d'
+            ? `${intentText || intent?.projectName || '产品'}。基于原始设计图生成2D多视图平面工程图：同一个物体必须包含正视图、后视图、左侧视图、右侧视图、上视图、下视图、关键尺寸、比例标尺、材料/结构标注；只展示这个物体，不要场景，不要重新设计，不要改变原图主体。`
+          : actionKind === '3d'
+          ? `${intentText || intent?.projectName || '产品'}。生成二维仿3D效果图，等轴测或三分之四视角，不生成真实3D网格模型。`
+          : actionKind === 'explosion'
+            ? `${intentText || intent?.projectName || '产品'}。基于原始设计图生成二维平面爆炸拆解图，必须保留原产品轮廓、比例、结构关系和材质特征。`
+          : actionKind === 'scene_fusion'
+            ? `${intentText || intent?.projectName || '产品'}。基于原始设计图做场景融合，必须保留原产品主体，只替换环境、光影和摆放场景。`
+          : intentText,
         projectName: intent?.projectName || null,
         industry: intent?.industry || '装备制造',
         mode: 'redesign',
+        context: imageEditModeMap[actionKind] ? { imageEditMode: imageEditModeMap[actionKind] } : undefined,
         options: nextOptions,
       };
       if (collectedMaterialsRef.current.referenceAssetId) {
@@ -1114,95 +1387,156 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         payload.assetUrls = [collectedMaterialsRef.current.referenceImage].filter((u): u is string => Boolean(u));
       }
       const task = await createIndustrialDesignWorkflow(payload);
-      patchMessage(statusMessage.id, {
-        taskId: task.taskId,
-        projectId: task.projectId || projectIdValue || null,
-        cards: [{
-          id: `${statusMessage.id}-status`,
-          type: 'status',
-          data: { agent: 'design_agent', task: '生成', progress: 5, stage: task.currentStep || '任务已提交', estimatedRemaining: '约 1-3 分钟' },
-        }],
-        text: `已提交${actionKind === '3d' ? '3D模型' : actionKind === 'cad' ? 'CAD图纸' : actionKind === 'render' ? '宣传图' : '报价'}任务，正在生成…`,
-      });
+      const updatedStatus: WorkflowCard = {
+        id: statusId,
+        type: 'status',
+        data: { agent: 'design_agent', task: actionLabel, progress: 5, stage: task.currentStep || '任务已提交', estimatedRemaining: '约 1-3 分钟' },
+      };
+      patchMessage(msgId, { cards: [updatedStatus] });
 
       let current = task;
       for (let i = 0; i < 120; i += 1) {
         if (current.status === 'completed' || current.status === 'failed') break;
         await new Promise((resolve) => setTimeout(resolve, 3000));
         current = await getIndustrialDesignWorkflowTask(task.taskId);
-        patchMessage(statusMessage.id, {
-          cards: [{
-            id: `${statusMessage.id}-status`,
-            type: 'status',
-            data: { agent: 'design_agent', task: '生成', progress: current.progress, stage: current.currentStep || '执行中', estimatedRemaining: null },
-          }],
-        });
+        const pollingStatus: WorkflowCard = {
+          id: statusId,
+          type: 'status',
+          data: { agent: 'design_agent', task: actionLabel, progress: current.progress, stage: current.currentStep || '执行中', estimatedRemaining: null },
+        };
+        patchMessage(msgId, { cards: [pollingStatus] });
       }
 
       if (current.status === 'failed') throw new Error(current.error || '生成失败');
 
       const outputs = current.outputs || EMPTY_OUTPUTS;
       const modelUrl = getCadAiOutputValue(outputs, ['modelGlb', 'modelStl', 'modelDownloadUrl']);
-      const stepUrl = getCadAiOutputValue(outputs, ['modelStep']);
+      const cad2dUrl = getCadAiOutputValue(outputs, ['planLine', 'planLineSvg', 'drawingSvg', 'drawingDxf']);
       const renderUrl = getCadAiOutputValue(outputs, ['renderPng', 'enhancedImage']);
 
       let resultText = '';
-      let resultCards: WorkflowCard[] = [];
-      if (actionKind === '3d' && modelUrl) {
-        resultText = '3D 模型已生成，可在预览面板查看。';
-        resultCards = [{ id: `${statusMessage.id}-3d`, type: 'design_scheme', data: { schemeId: `3d`, name: '3D 模型', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: modelUrl, drawingUrl: stepUrl, outputs } }];
-      } else if (actionKind === 'cad' && stepUrl) {
-        resultText = 'CAD 图纸已生成，可下载查看。';
-        resultCards = [{ id: `${statusMessage.id}-cad`, type: 'design_scheme', data: { schemeId: `cad`, name: 'CAD 图纸', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: null, drawingUrl: stepUrl || modelUrl, outputs } }];
+      let resultCard: WorkflowCard | null = null;
+      if (actionKind === 'design_sheet' && renderUrl) {
+        resultText = '设计图已生成。';
+        resultCard = { id: `${statusId}-design-sheet`, type: 'design_scheme', data: { schemeId: `design_sheet`, name: '设计图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
+      } else if (actionKind === 'plan_2d' && (renderUrl || cad2dUrl)) {
+        resultText = '2D平面图已生成。';
+        resultCard = { id: `${statusId}-plan-2d`, type: 'design_scheme', data: { schemeId: `plan_2d`, name: '2D平面图', thumbnails: renderUrl ? [renderUrl] : [], materials: [], estimatedPrice: null, renderUrl: renderUrl || null, drawingUrl: cad2dUrl || null, outputs } };
+      } else if (actionKind === '3d' && renderUrl) {
+        resultText = '仿3D效果图已生成。';
+        resultCard = { id: `${statusId}-3d`, type: 'design_scheme', data: { schemeId: `3d`, name: '仿3D效果图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
+      } else if (actionKind === 'cad' && cad2dUrl) {
+        resultText = '2D CAD 图纸已生成。';
+        resultCard = { id: `${statusId}-cad`, type: 'design_scheme', data: { schemeId: `cad`, name: '2D CAD 图纸', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: null, drawingUrl: cad2dUrl || modelUrl, outputs } };
       } else if (actionKind === 'render' && renderUrl) {
         resultText = '宣传图已生成。';
-        resultCards = [{ id: `${statusMessage.id}-render`, type: 'design_scheme', data: { schemeId: `render`, name: '宣传图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } }];
+        resultCard = { id: `${statusId}-render`, type: 'design_scheme', data: { schemeId: `render`, name: '宣传图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
+      } else if (actionKind === 'scene_fusion' && renderUrl) {
+        resultText = '场景融合图已生成。';
+        resultCard = { id: `${statusId}-fusion`, type: 'design_scheme', data: { schemeId: `fusion`, name: '场景融合图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
+      } else if (actionKind === 'explosion') {
+        const explosionUrl = getCadAiOutputValue(outputs, ['explosionPng']);
+        resultText = explosionUrl ? '爆炸图已生成。' : '爆炸图生成完成。';
+        if (explosionUrl) {
+          resultCard = { id: `${statusId}-explosion`, type: 'design_scheme', data: { schemeId: `explosion`, name: '爆炸图', thumbnails: [explosionUrl], materials: [], estimatedPrice: null, renderUrl: explosionUrl, drawingUrl: null, outputs } };
+        }
       } else if (actionKind === 'quote') {
-        resultText = `报价参考已生成（基于设计参数估算）。\n预估材料成本：¥8,500\n预估生产成本：¥6,200\n客户报价：¥19,800`;
-        resultCards = [{ id: `${statusMessage.id}-quote`, type: 'quote', data: { quoteId: `Q-${statusMessage.id.slice(-6)}`, schemeName: '方案A', materialCost: 8500, productionCost: 6200, totalInternal: 14700, totalCustomer: 19800 } }];
+        resultText = '报价参考已生成。';
+        resultCard = { id: `${statusId}-quote`, type: 'quote', data: { quoteId: `Q-${statusId.slice(-6)}`, schemeName: '方案A', materialCost: 8500, productionCost: 6200, totalInternal: 14700, totalCustomer: 19800 } };
+      } else if (['design_sheet', 'plan_2d', 'render', 'scene_fusion', 'explosion', '3d', 'cad'].includes(actionKind)) {
+        throw new Error(`${actionLabel}执行完成，但没有返回有效图片或图纸结果。`);
       } else {
         resultText = '已处理完成。';
       }
 
-      patchMessage(statusMessage.id, {
+      const cards: WorkflowCard[] = resultCard ? [resultCard] : [];
+
+      // 更新消息内卡片
+      patchMessage(msgId, {
         status: 'completed',
         text: resultText,
+        cards,
         taskId: current.taskId,
         projectId: current.projectId || projectIdValue,
         versionId: current.versionId,
         outputs,
-        cards: resultCards,
       });
-      void persistMessage('assistant', { id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId, outputs, cards: resultCards } as ChatMessage);
+      promoteOutputsToReference(outputs);
+      void persistMessage('assistant', { id: msgId, role: 'assistant', text: resultText, status: 'completed', taskId: current.taskId, projectId: current.projectId || projectIdValue, versionId: current.versionId, outputs, cards } as ChatMessage);
+
       const mirrorType = actionKind === '3d'
-        ? 'model_3d'
+        ? 'render'
         : actionKind === 'cad'
           ? 'cad'
           : actionKind === 'quote'
             ? 'quote'
             : 'render';
       void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-        sourceKey: `legacy-${mirrorType}:${current.taskId || statusMessage.id}`,
+        sourceKey: `legacy-${mirrorType}:${current.taskId || statusId}`,
         type: mirrorType,
         status: 'completed',
-        title: actionKind === '3d' ? '3D 模型' : actionKind === 'cad' ? 'CAD 图纸' : actionKind === 'quote' ? '方案报价' : '宣传图',
+        title: actionLabel,
         summary: resultText,
         projectId: current.projectId || projectIdValue || null,
         taskId: current.taskId,
         versionId: current.versionId,
         parentSourceKey: `legacy-project:${current.projectId || projectIdValue}`,
-        outputData: { workflowOutputs: { ...outputs }, cards: resultCards },
+        outputData: { workflowOutputs: { ...outputs } },
         uiData: { projection: actionKind === 'quote' ? 'quote_card' : 'result_card' },
       });
       if (outputs) {
-        applyMessageToPreview({ id: statusMessage.id, role: 'assistant', text: resultText, status: 'completed', outputs } as ChatMessage);
+        applyMessageToPreview({ id: msgId, role: 'assistant', text: resultText, status: 'completed', outputs } as ChatMessage);
         setShowPreview(true);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败';
-      patchMessage(statusMessage.id, { status: 'failed', text: message, error: message });
+      const errorCard: WorkflowCard = {
+        id: `${statusId}-error`,
+        type: 'status',
+        data: { agent: 'design_agent', task: actionLabel, progress: 0, stage: message, estimatedRemaining: null },
+      };
+      patchMessage(msgId, { status: 'failed', text: message, error: message, cards: [errorCard] });
+      void persistMessage('assistant', { id: msgId, role: 'assistant', text: message, status: 'failed', error: message } as ChatMessage);
     }
   };
+
+  const handleEngineeringPackage = useCallback(async () => {
+    const lastTaskMsg = [...messages].reverse().find((m) => m.role === 'assistant' && m.taskId && m.status === 'completed');
+    const taskId = lastTaskMsg?.taskId;
+    if (!taskId) {
+      const msg: ChatMessage = { id: nextId(), role: 'assistant', text: '请先生成设计方案后再导出工程包。', status: 'completed' };
+      setMessages((prev) => [...prev, msg]);
+      return;
+    }
+    const statusMsg: ChatMessage = { id: nextId(), role: 'assistant', text: '正在生成工程设计包…', status: 'running' };
+    setMessages((prev) => [...prev, statusMsg]);
+    try {
+      const result = await createEngineeringPackage(taskId);
+      patchMessage(statusMsg.id, {
+        status: 'completed',
+        text: `工程设计包已生成。\n文件名：${result.filename || 'package.zip'}\n[下载](${result.packageDownloadUrl || '#'})`,
+      });
+      void workspaceMirrorService.safeMirror(conversationIdRef.current, {
+        sourceKey: `legacy-package:${taskId}`,
+        type: 'engineering_package',
+        status: 'completed',
+        title: '工程设计包',
+        summary: `工程设计包已生成：${result.filename || 'package.zip'}`,
+        projectId: projectCtxRef.current?.projectId || projectId || null,
+        taskId,
+        parentSourceKey: `legacy-project:${projectCtxRef.current?.projectId || projectId}`,
+        outputData: {
+          filename: result.filename || 'package.zip',
+          packageDownloadUrl: result.packageDownloadUrl || '',
+        },
+        uiData: { projection: 'package_card' },
+      });
+      void persistMessage('assistant', { id: statusMsg.id, role: 'assistant', text: `工程设计包已生成：${result.filename || 'package.zip'}`, status: 'completed' } as ChatMessage);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '工程包导出失败';
+      patchMessage(statusMsg.id, { status: 'failed', text: message, error: message });
+    }
+  }, [messages, projectId]);
 
   const handleCardAction = useCallback((action: string, data: Record<string, unknown>) => {
     if (action === 'prompt.confirm') {
@@ -1290,31 +1624,45 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       if (card?.type === 'design_scheme') {
         const scheme = card.data as { outputs?: CadAiTaskStatus['outputs'] | null };
         if (scheme.outputs) {
-          setLatestOutputs(scheme.outputs);
           const renderUrl = normalizePreviewImageSource(
             getCadAiOutputValue(scheme.outputs, ['renderPng', 'enhancedImage']),
           );
           if (renderUrl) {
             setPreviewSource(renderUrl);
             setPreviewKind('image');
-            setPreviewTab('image');
+            setShowPreview(true);
+            return;
+          }
+          const drawingUrl = normalizePreviewImageSource(
+            getCadAiOutputValue(scheme.outputs, ['planLine', 'planLineSvg', 'drawingSvg', 'drawingDxf']),
+          );
+          if (drawingUrl) {
+            setPreviewSource(drawingUrl);
+            setPreviewKind('image');
+            setShowPreview(true);
           }
         }
         setShowPreview(true);
       }
       return;
     }
+    if (action === 'scheme.promote') {
+      const promoteAction = data.promote as WorkflowActionKind | undefined;
+      if (promoteAction && promoteAction !== 'package') {
+        const ctx = pendingWorkflowRef.current || projectCtxRef.current;
+        const intent = ctx?.intent ?? null;
+        const projectIdValue = ctx?.projectId ?? '';
+        void triggerNextWorkflow(promoteAction, intent, projectIdValue);
+      }
+      if (promoteAction === 'package') {
+        void handleEngineeringPackage();
+      }
+      return;
+    }
     if (action === 'next.action') {
-      const nextAction = data.nextAction as string | undefined;
-      const cardId = data.cardId as string | undefined;
-      const card = cardId
-        ? messages.flatMap((m) => m.cards ?? []).find((c) => c.id === cardId)
-        : undefined;
-      const isMaterialConfirm = card?.type === 'next_step'
-        && ((card.data as NextStepCardData)?.current === 'materials_collected'
-          || (card.data as NextStepCardData)?.current === 'ready_to_generate');
+      const nextAction = data.nextAction as WorkflowActionKind | undefined;
 
-      if (isMaterialConfirm) {
+      if (nextAction === 'confirm') {
         const ctx = pendingWorkflowRef.current;
         if (ctx) {
           confirmedRequirementRef.current.add(ctx.messageId);
@@ -1325,7 +1673,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         return;
       }
 
-      if (nextAction && ['quote', '3d', 'cad', 'render'].includes(nextAction)) {
+      if (nextAction && ['design_sheet', 'plan_2d', 'render', 'scene_fusion', 'explosion', '3d', 'cad', 'quote'].includes(nextAction)) {
         const ctx = pendingWorkflowRef.current || projectCtxRef.current;
         const intent = ctx?.intent ?? null;
         const projectIdValue = ctx?.projectId ?? '';
@@ -1334,47 +1682,11 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
       }
 
       if (nextAction === 'package') {
-        const lastTaskMsg = [...messages].reverse().find((m) => m.role === 'assistant' && m.taskId && m.status === 'completed');
-        const taskId = lastTaskMsg?.taskId;
-        if (!taskId) {
-          const msg: ChatMessage = { id: nextId(), role: 'assistant', text: '请先生成设计方案后再导出工程包。', status: 'completed' };
-          setMessages((prev) => [...prev, msg]);
-          return;
-        }
-        const statusMsg: ChatMessage = { id: nextId(), role: 'assistant', text: '正在生成工程设计包…', status: 'running' };
-        setMessages((prev) => [...prev, statusMsg]);
-        void (async () => {
-          try {
-            const result = await createEngineeringPackage(taskId);
-            patchMessage(statusMsg.id, {
-              status: 'completed',
-              text: `工程设计包已生成。\n文件名：${result.filename || 'package.zip'}\n[下载](${result.packageDownloadUrl || '#'})`,
-            });
-            void workspaceMirrorService.safeMirror(conversationIdRef.current, {
-              sourceKey: `legacy-package:${taskId}`,
-              type: 'engineering_package',
-              status: 'completed',
-              title: '工程设计包',
-              summary: `工程设计包已生成：${result.filename || 'package.zip'}`,
-              projectId: projectCtxRef.current?.projectId || projectId || null,
-              taskId,
-              parentSourceKey: `legacy-project:${projectCtxRef.current?.projectId || projectId}`,
-              outputData: {
-                filename: result.filename || 'package.zip',
-                packageDownloadUrl: result.packageDownloadUrl || '',
-              },
-              uiData: { projection: 'package_card' },
-            });
-            void persistMessage('assistant', { id: statusMsg.id, role: 'assistant', text: `工程设计包已生成：${result.filename || 'package.zip'}`, status: 'completed' } as ChatMessage);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : '工程包导出失败';
-            patchMessage(statusMsg.id, { status: 'failed', text: message, error: message });
-          }
-        })();
+        void handleEngineeringPackage();
         return;
       }
     }
-  }, [messages, pendingAttachments]);
+  }, [messages, pendingAttachments, handleEngineeringPackage]);
 
   useEffect(() => {
     if (didAutoRun.current || !initialPromptRef.current) return;
@@ -1518,19 +1830,6 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
                       </span>
                     ) : null}
                   </div>
-                  {message.cards && message.cards.length > 0 ? (
-                    <div className="mt-2 space-y-2">
-                      {message.cards.map((card) => (
-                        <div key={card.id} className="w-[320px] max-w-full sm:w-[380px]">
-                          <WorkflowCardView
-                            card={card}
-                            onAction={handleCardAction}
-                            confirmed={confirmedMessages.includes(message.id)}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
                   {message.status === 'failed' && message.role === 'assistant' ? (
                     <div className="mt-1.5 flex items-center gap-1 text-[11px] text-rose-500">
                       <XCircle className="size-3" />
@@ -1543,6 +1842,12 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
                       已完成
                     </div>
                   ) : null}
+                  {message.cards && message.cards.length > 0 ? (
+                    <MessageCardStack
+                      cards={message.cards}
+                      onAction={(card, action, extra) => handleCardAction(action, { cardId: card.id, ...extra })}
+                    />
+                  ) : null}
                 </div>
                 {message.role === 'user' ? (
                   <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-purple-100 text-purple-600">
@@ -1554,6 +1859,8 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           </div>
         )}
       </div>
+
+      {/* ── 固定工作流卡槽（已移除，卡片统一嵌入消息内） ── */}
 
       <div className="shrink-0 px-4 pb-4 pt-2">
         {pendingAttachments.length > 0 ? (
@@ -1659,7 +1966,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
   const previewPanel = (
     <div className="flex h-full flex-col bg-white">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <span className="text-xs font-medium text-slate-500">预览</span>
+        <span className="text-xs font-medium text-slate-500">当前预览</span>
         <button
           type="button"
           onClick={() => setShowPreview(false)}
@@ -1670,79 +1977,27 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         </button>
       </div>
 
-      <div className="flex border-b border-slate-200">
-        {PREVIEW_TABS.map((tab) => {
-          const Icon = tab.icon;
-          const active = previewTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setPreviewTab(tab.id)}
-              className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs font-medium transition-colors ${
-                active
-                  ? 'border-purple-500 text-purple-600'
-                  : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              <Icon className="size-3.5" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
       <div className="flex flex-1 items-center justify-center overflow-auto p-4">
-        {previewTab === '3d' && previewKind === 'stl' && previewSource ? (
+        {previewKind === 'stl' && previewSource ? (
           <div className="flex h-full w-full flex-col gap-3">
             <div className="flex-1 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
               <GeneratedStlPreview downloadUrl={previewSource} />
             </div>
           </div>
-        ) : (previewTab === 'image' || previewTab === 'cad') && previewSource && previewKind !== 'stl' ? (
+        ) : previewSource && previewKind !== 'stl' ? (
           <div className="flex h-full w-full flex-col gap-3">
-            {latestOutputs ? (() => {
-              const explosionUrl = getCadAiOutputValue(latestOutputs, ['explosionPng']);
-              const renderUrl = getCadAiOutputValue(latestOutputs, ['renderPng', 'enhancedImage']);
-              if (!explosionUrl || !renderUrl || explosionUrl === renderUrl) return null;
-              const previewOptions: Array<{ label: string; url: string }> = [];
-              if (renderUrl) previewOptions.push({ label: '设计效果图', url: renderUrl });
-              if (explosionUrl) previewOptions.push({ label: '爆炸分解图', url: explosionUrl });
-              return (
-                <div className="flex items-center gap-1.5">
-                  {previewOptions.map((option) => (
-                    <button
-                      key={option.label}
-                      type="button"
-                      onClick={() => {
-                        const url = normalizePreviewImageSource(option.url);
-                        if (url) setPreviewSource(url);
-                      }}
-                      className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
-                        previewSource === normalizePreviewImageSource(option.url)
-                          ? 'border-purple-300 bg-purple-50 text-purple-700'
-                          : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      <ImageIcon className="size-3" />
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              );
-            })() : null}
             <div className="flex flex-1 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-4">
               <PreviewImage
                 src={previewSource}
-                alt={previewTab}
+                alt="当前预览"
                 className="max-h-full max-w-full object-contain"
               />
             </div>
           </div>
         ) : (
           <div className="text-center">
-            <p className="text-sm text-slate-500">{TAB_PLACEHOLDER[previewTab].title}</p>
-            <p className="mt-1 text-[10px] text-slate-400/70">{TAB_PLACEHOLDER[previewTab].desc}</p>
+            <p className="text-sm text-slate-500">暂无当前预览</p>
+            <p className="mt-1 text-[10px] text-slate-400/70">生成图片或2D图纸后，这里只显示当前结果。</p>
           </div>
         )}
       </div>

@@ -69,6 +69,37 @@ _NEXT_STEPS: dict[str, list[dict[str, object]]] = {
     ],
 }
 
+_PROMOTION_RENDER_NEXT_STEPS: list[dict[str, object]] = [
+    {
+        "type": "regenerate_scene",
+        "label": "换一个宣发场景",
+        "description": "沿用同一张设计图，重新做图片编辑和场景融合",
+    },
+    {
+        "type": "adjust_style",
+        "label": "调整宣发风格",
+        "description": "保持产品一致，调整光线、材质氛围和商业表达",
+    },
+    {
+        "type": "generate_copy",
+        "label": "生成海报文案",
+        "description": "基于宣发图生成标题、卖点和投放文案",
+    },
+]
+
+
+def _is_promotion_render(source_node: WorkspaceNode | None) -> bool:
+    if source_node is None or source_node.node_type != "render":
+        return False
+    for bucket in (source_node.ui_data, source_node.output_data):
+        if not isinstance(bucket, dict):
+            continue
+        if bucket.get("renderMode") == "promotion":
+            return True
+        if bucket.get("sourceImageUrl") or bucket.get("sourceNodeTitle"):
+            return True
+    return False
+
 
 class NextActionAgent:
     def create_next_action(
@@ -80,8 +111,13 @@ class NextActionAgent:
         project_id: str | None,
         parent_id: UUID,
         source_node_type: str,
+        source_node: WorkspaceNode | None = None,
     ) -> WorkspaceNode | None:
-        recs = list(_NEXT_STEPS.get(source_node_type) or [])
+        recs = (
+            list(_PROMOTION_RENDER_NEXT_STEPS)
+            if _is_promotion_render(source_node)
+            else list(_NEXT_STEPS.get(source_node_type) or [])
+        )
         if not recs:
             return None
         # 已有同类型 next_action 子节点时跳过，避免重复。

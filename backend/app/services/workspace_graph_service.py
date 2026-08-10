@@ -9,8 +9,25 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.conversation import Conversation
+from app.models.orchestration import AgentRun, WorkflowInstance
 from app.models.workspace_node import WorkspaceNode, WorkspaceNodeAsset
 from app.schemas.workspace_graph import WorkspaceNodeData, WorkspaceNodeAssetData
+from app.services.orchestration.contracts import AgentExecutionResult
+from app.services.orchestration.runtime import OrchestrationRuntime
+
+
+AGENT_KEY_TO_TYPE: dict[str, str] = {
+    "requirement_agent": "requirement",
+    "project_agent": "project",
+    "design_agent": "design",
+    "render_agent": "render",
+    "model_agent": "three_d",
+    "cad_agent": "cad",
+    "quote_agent": "quote",
+    "engineering_agent": "engineering_package",
+    "engineering_package_agent": "engineering_package",
+}
 
 
 class WorkspaceGraphService:
@@ -53,6 +70,7 @@ class WorkspaceGraphService:
         )
         db.add(node)
         db.flush()
+        WorkspaceGraphService._ensure_agent_run(db, node)
         return node
 
     @staticmethod
@@ -88,6 +106,8 @@ class WorkspaceGraphService:
             elif key in {"input_data", "output_data", "ui_data"} and isinstance(value, dict):
                 setattr(node, key, value)
         db.flush()
+        if "status" in fields:
+            WorkspaceGraphService._sync_agent_run_status(db, node)
         return node
 
     @staticmethod
@@ -206,6 +226,154 @@ class WorkspaceGraphService:
             ],
             created_at=node.created_at,
             updated_at=node.updated_at,
+        )
+
+    @staticmethod
+    def _ensure_agent_run(db: Session, node: WorkspaceNode) -> None:
+        """Create the execution record behind an agent-backed WorkspaceNode."""
+        if not node.agent_key:
+            return
+        if isinstance(node.ui_data, dict) and node.ui_data.get("agentRunId"):
+            return
+        agent_type = AGENT_KEY_TO_TYPE.get(node.agent_key)
+        if agent_type is None:
+            return
+        project_id = WorkspaceGraphService._resolve_project_id(db, node)
+        if not project_id:
+            return
+
+        workflow = WorkspaceGraphService._get_or_create_workflow(
+            db,
+            user_id=node.user_id,
+            project_id=project_id,
+            conversation_id=node.conversation_id,
+        )
+        runtime = OrchestrationRuntime(db)
+        run = runtime.enqueue_agent(
+            workflow_id=str(workflow.id),
+            agent_type=agent_type,
+            input_snapshot={
+                "workspaceNodeId": str(node.id),
+                "nodeType": node.node_type,
+                "title": node.title,
+                "summary": node.summary,
+                "inputData": node.input_data,
+            },
+        )
+        ui_data = dict(node.ui_data or {})
+        ui_data["workflowId"] = str(workflow.id)
+        ui_data["agentRunId"] = str(run.id)
+        node.ui_data = ui_data
+        WorkspaceGraphService._apply_node_status_to_agent_run(db, node, run)
+        db.flush()
+
+    @staticmethod
+    def _sync_agent_run_status(db: Session, node: WorkspaceNode) -> None:
+        if not isinstance(node.ui_data, dict):
+            return
+        run_id = node.ui_data.get("agentRunId")
+        if not isinstance(run_id, str) or not run_id:
+            return
+        try:
+            run_uuid = UUID(run_id)
+        except ValueError:
+            return
+        run = db.get(AgentRun, run_uuid)
+        if run is None or run.user_id != node.user_id:
+            return
+        WorkspaceGraphService._apply_node_status_to_agent_run(db, node, run)
+        db.flush()
+
+    @staticmethod
+    def _apply_node_status_to_agent_run(
+        db: Session,
+        node: WorkspaceNode,
+        run: AgentRun,
+    ) -> None:
+        runtime = OrchestrationRuntime(db)
+        if node.status in {"queued", "draft"}:
+            run.status = "queued"
+            return
+        if node.status == "running":
+            runtime.mark_running(run)
+            return
+        if node.status == "waiting_user":
+            runtime.mark_waiting_user(
+                run,
+                AgentExecutionResult(
+                    status="waiting_user",
+                    output_snapshot={
+                        "workspaceNodeId": str(node.id),
+                        "outputData": node.output_data,
+                        "uiData": node.ui_data,
+                    },
+                    artifact_ids=(),
+                    next_agents=(),
+                    message=f"{node.title} waiting for user",
+                ),
+            )
+            return
+        if node.status == "completed":
+            runtime.mark_succeeded(
+                run,
+                AgentExecutionResult(
+                    status="succeeded",
+                    output_snapshot={
+                        "workspaceNodeId": str(node.id),
+                        "outputData": node.output_data,
+                        "uiData": node.ui_data,
+                    },
+                    artifact_ids=(),
+                    next_agents=(),
+                    message=f"{node.title} completed",
+                ),
+            )
+            return
+        if node.status == "failed":
+            output = node.output_data if isinstance(node.output_data, dict) else {}
+            message = str(output.get("errorMessage") or f"{node.title} failed")
+            runtime.mark_failed(
+                run,
+                error_code=str(output.get("errorCode") or "AGENT_FAILED"),
+                error_message=message,
+            )
+            return
+        if node.status == "superseded":
+            run.status = "skipped"
+
+    @staticmethod
+    def _resolve_project_id(db: Session, node: WorkspaceNode) -> str | None:
+        if node.project_id:
+            return node.project_id
+        conversation = db.get(Conversation, node.conversation_id)
+        if conversation is not None and conversation.project_id:
+            return conversation.project_id
+        return None
+
+    @staticmethod
+    def _get_or_create_workflow(
+        db: Session,
+        *,
+        user_id: str,
+        project_id: str,
+        conversation_id: UUID,
+    ) -> WorkflowInstance:
+        workflow = db.scalar(
+            select(WorkflowInstance)
+            .where(
+                WorkflowInstance.user_id == user_id,
+                WorkflowInstance.project_id == project_id,
+                WorkflowInstance.conversation_id == conversation_id,
+            )
+            .order_by(WorkflowInstance.created_at.asc())
+        )
+        if workflow is not None:
+            return workflow
+        return OrchestrationRuntime(db).create_workflow(
+            user_id=user_id,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            initial_input={"source": "workspace_graph"},
         )
 
 

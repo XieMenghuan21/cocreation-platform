@@ -84,7 +84,7 @@ class IndustrialDesignImageEditRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    prompt: str = Field(min_length=1, max_length=4000)
+    prompt: str = Field(min_length=1, max_length=12000)
     image_paths: list[str] = Field(alias="imagePaths", min_length=1, max_length=6)
     mask_path: str | None = Field(default=None, alias="maskPath", max_length=1000)
     size: str = Field(default="1536x1024", max_length=32)

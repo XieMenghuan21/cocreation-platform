@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from uuid import UUID
 
 from sqlalchemy import select
@@ -22,12 +23,25 @@ class RenderAgentError(Exception):
     pass
 
 
+def _extract_asset_ids_from_urls(urls: list[str]) -> list[str]:
+    ids: list[str] = []
+    for url in urls:
+        match = re.search(r"/assets/([0-9a-fA-F-]{36})/download", url)
+        if not match:
+            continue
+        asset_id = match.group(1)
+        if asset_id not in ids:
+            ids.append(asset_id)
+    return ids
+
+
 def build_render_request(
     *,
     project_name: str,
     requirement_text: str,
     direction_image_prompt: str | None,
     industry: str | None,
+    reference_image_urls: list[str],
 ) -> object:
     """构造工业品设计工作流请求。"""
     from app.schemas.industrial_design import (
@@ -41,16 +55,19 @@ def build_render_request(
         industry=industry or "装备制造",
         inputType="text",
         text=text,
+        assetIds=_extract_asset_ids_from_urls(reference_image_urls),
+        assetUrls=reference_image_urls,
         mode="create",
         options=IndustrialDesignWorkflowOptions(
             generateCad=False,
             generateThreePreview=False,
             generateExplosion=False,
             generatePlanLine=False,
-            generateDrawing=True,
+            generateDrawing=False,
             generateRender=True,
-            enhanceImage=False,
+            enhanceImage=True,
         ),
+        context={"imageEditMode": "poster"},
     )
 
 
@@ -65,6 +82,86 @@ def _pick_output_image(outputs: dict[str, object]) -> str | None:
             if isinstance(item, dict) and isinstance(item.get("url"), str):
                 return item["url"]
     return None
+
+
+def _first_string(data: dict[str, object], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _collect_reference_image_urls(db: Session, node: WorkspaceNode) -> list[str]:
+    """Resolve the upstream image that render must edit instead of text-to-image."""
+    urls: list[str] = []
+    image_keys = (
+        "referenceImageUrl",
+        "sourceImageUrl",
+        "renderImageUrl",
+        "renderPng",
+        "enhancedImage",
+        "imageUrl",
+        "previewUrl",
+        "drawingUrl",
+    )
+
+    current: WorkspaceNode | None = node
+    visited: set[UUID] = set()
+    while current is not None and current.id not in visited:
+        visited.add(current.id)
+        for bucket in (current.output_data, current.input_data, current.ui_data):
+            if not isinstance(bucket, dict):
+                continue
+            direct = _first_string(bucket, image_keys)
+            if direct and direct not in urls:
+                urls.append(direct)
+            workflow_outputs = bucket.get("workflowOutputs")
+            if isinstance(workflow_outputs, dict):
+                nested = _first_string(workflow_outputs, image_keys)
+                if nested and nested not in urls:
+                    urls.append(nested)
+        if current.parent_id is None:
+            break
+        current = db.get(WorkspaceNode, current.parent_id)
+    return urls
+
+
+def _resolve_source_image_metadata(
+    db: Session,
+    node: WorkspaceNode,
+) -> tuple[str | None, str | None]:
+    """Return the first upstream image URL and its node title for UI traceability."""
+    image_keys = (
+        "referenceImageUrl",
+        "sourceImageUrl",
+        "renderImageUrl",
+        "renderPng",
+        "enhancedImage",
+        "imageUrl",
+        "previewUrl",
+        "drawingUrl",
+    )
+
+    current: WorkspaceNode | None = node
+    visited: set[UUID] = set()
+    while current is not None and current.id not in visited:
+        visited.add(current.id)
+        for bucket in (current.output_data, current.input_data, current.ui_data):
+            if not isinstance(bucket, dict):
+                continue
+            direct = _first_string(bucket, image_keys)
+            if direct:
+                return direct, current.title
+            workflow_outputs = bucket.get("workflowOutputs")
+            if isinstance(workflow_outputs, dict):
+                nested = _first_string(workflow_outputs, image_keys)
+                if nested:
+                    return nested, current.title
+        if current.parent_id is None:
+            break
+        current = db.get(WorkspaceNode, current.parent_id)
+    return None, None
 
 
 def sync_node_from_task(db: Session, task_id: str) -> WorkspaceNode | None:
@@ -154,6 +251,7 @@ def sync_node_from_task(db: Session, task_id: str) -> WorkspaceNode | None:
             project_id=node.project_id,
             parent_id=node.id,
             source_node_type=node.node_type,
+            source_node=updated or node,
         )
 
     return updated or node
@@ -191,11 +289,37 @@ class RenderAgent:
                 },
             )
 
+        reference_image_urls = _collect_reference_image_urls(db, node)
+        if not reference_image_urls:
+            node = workspace_graph_service.update_node(
+                db,
+                node_id=node.id,
+                user_id=user_id,
+                status="failed",
+                output_data={
+                    **dict(node.output_data or {}),
+                    "errorCode": "RENDER_REFERENCE_IMAGE_REQUIRED",
+                    "errorMessage": "宣发图已固定为图片编辑，必须先有一张设计图或参考图。",
+                },
+                ui_data={
+                    **dict(node.ui_data or {}),
+                    "currentStep": "缺少参考图，未启动文生图。",
+                    "progress": 100,
+                },
+            ) or node
+            db.flush()
+            return node
+
+        source_image_url, source_node_title = _resolve_source_image_metadata(db, node)
+        source_image_url = source_image_url or reference_image_urls[0]
+        source_node_title = source_node_title or "设计图"
+
         request = build_render_request(
             project_name=project_name,
             requirement_text=requirement_text,
             direction_image_prompt=direction_image_prompt,
             industry=industry,
+            reference_image_urls=reference_image_urls,
         )
         result = await industrial_design_workflow_service.create_workflow(
             request,
@@ -213,10 +337,19 @@ class RenderAgent:
                 user_id=user_id,
                 task_id=task_id,
                 status="running",
+                output_data={
+                    **dict(node.output_data or {}),
+                    "renderMode": "promotion",
+                    "sourceImageUrl": source_image_url,
+                    "sourceNodeTitle": source_node_title,
+                },
                 ui_data={
-                    **node.ui_data,
+                    **dict(node.ui_data or {}),
                     "taskId": task_id,
                     "currentStep": result.get("currentStep") or "",
+                    "renderMode": "promotion",
+                    "sourceImageUrl": source_image_url,
+                    "sourceNodeTitle": source_node_title,
                 },
             ) or node
         db.flush()

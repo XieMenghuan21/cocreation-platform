@@ -320,7 +320,7 @@ class IndustrialDesignWorkflowService:
         return "forgecad"
 
     def _external_chain_configured(self, request: IndustrialDesignWorkflowRequest) -> bool:
-        if request.options.generate_cad or request.options.generate_three_preview or request.options.generate_plan_line:
+        if request.options.generate_cad or request.options.generate_plan_line:
             return True
         if request.options.generate_render_views:
             return self.build123d_service.available
@@ -346,7 +346,7 @@ class IndustrialDesignWorkflowService:
         )
         enhances_uploaded_image = bool(
             request.options.enhance_image
-            and request.options.generate_render
+            and (request.options.generate_render or request.options.generate_explosion)
             and self._resolve_first_uploaded_image_asset_id(request) is not None
         )
         return generates_external_image or enhances_uploaded_image
@@ -553,13 +553,15 @@ class IndustrialDesignWorkflowService:
                     "detail": "2D 线图资产持久化失败，请稍后重试。",
                 })
 
-        if request.options.generate_three_preview:
+        if request.options.generate_three_preview and request.options.generate_cad:
             outputs["threePreview"] = self._build_three_preview_spec(project_name, request)
         if request.options.generate_render:
             outputs.setdefault("renderPng", None)
         if request.options.generate_explosion:
             outputs.setdefault("explosionPng", None)
-        if request.options.enhance_image and request.options.generate_render:
+        if request.options.enhance_image and (
+            request.options.generate_render or request.options.generate_explosion
+        ):
             image_edit_result = await self._try_generate_enhanced_image(
                 request=request,
                 project_name=project_name,
@@ -571,7 +573,11 @@ class IndustrialDesignWorkflowService:
                 publish_assets=False,
             )
             if image_edit_result:
-                self._apply_image_edit_result(outputs, image_edit_result)
+                self._apply_image_edit_result(
+                    outputs,
+                    image_edit_result,
+                    output_kind=self._image_edit_output_kind(request),
+                )
 
         missing_assets = self._missing_required_asset_outputs(
             request,
@@ -665,7 +671,7 @@ class IndustrialDesignWorkflowService:
             current_step = "工业品设计任务已提交，正在生成设计图。"
         elif request.options.generate_render:
             current_step = "工业品设计任务已提交，正在生成精修图。"
-        elif request.options.generate_cad or request.options.generate_three_preview:
+        elif request.options.generate_cad:
             provider_label = "build123d" if self._cad_provider(request) == "build123d" else "ForgeCAD"
             current_step = f"工业品设计任务已提交，正在调用本地部署 {provider_label} 生成 3D/CAD。"
 
@@ -842,6 +848,7 @@ class IndustrialDesignWorkflowService:
 
         if request.options.generate_drawing or request.options.generate_render:
             step_label = "设计图" if request.options.generate_drawing and not request.options.generate_render else "宣发图"
+            image_edit_succeeded = False
             if request.options.generate_render and request.options.enhance_image:
                 await self._update_task(workflow_id, progress=20, current_step="正在基于参考设计图生成场景融合宣发图。")
                 image_edit_result = await self._try_generate_enhanced_image(
@@ -854,7 +861,11 @@ class IndustrialDesignWorkflowService:
                     publish_assets=False,
                 )
                 if image_edit_result:
-                    self._apply_image_edit_result(outputs, image_edit_result)
+                    self._apply_image_edit_result(
+                        outputs,
+                        image_edit_result,
+                        output_kind=self._image_edit_output_kind(request),
+                    )
                     await self._update_task(
                         workflow_id,
                         progress=80,
@@ -862,7 +873,8 @@ class IndustrialDesignWorkflowService:
                         outputs=outputs,
                         diagnostics=diagnostics,
                     )
-            else:
+                    image_edit_succeeded = True
+            if not image_edit_succeeded:
                 try:
                     provider_label = self._image_provider_label()
                     await self._update_task(workflow_id, progress=20, current_step=f"正在调用 {provider_label} 生成{step_label}。")
@@ -965,7 +977,7 @@ class IndustrialDesignWorkflowService:
                     diagnostics=diagnostics,
                 )
 
-        if request.options.generate_cad or request.options.generate_three_preview:
+        if request.options.generate_cad:
             if self._cad_provider(request) == "build123d":
                 try:
                     await self._update_task(workflow_id, progress=35, current_step="正在调用 build123d 生成 3D 模型。")
@@ -1118,9 +1130,9 @@ class IndustrialDesignWorkflowService:
                     diagnostics=diagnostics,
                 )
 
-        if request.options.generate_three_preview:
+        if request.options.generate_three_preview and request.options.generate_cad:
             outputs.setdefault("threePreview", self._build_three_preview_spec(project_name, request))
-        if request.options.generate_explosion:
+        if request.options.generate_explosion and not request.options.enhance_image:
             try:
                 await self._update_task(
                     workflow_id,
@@ -1165,7 +1177,12 @@ class IndustrialDesignWorkflowService:
                     "title": "爆炸图入库失败",
                     "detail": "爆炸分解图资产持久化失败，可稍后重试。",
                 })
-        if request.options.enhance_image and request.options.generate_render and not outputs.get("enhancedImage"):
+        if (
+            request.options.enhance_image
+            and (request.options.generate_render or request.options.generate_explosion)
+            and not outputs.get("enhancedImage")
+            and not outputs.get("explosionPng")
+        ):
             image_edit_result = await self._try_generate_enhanced_image(
                 request=request,
                 project_name=project_name,
@@ -1176,7 +1193,11 @@ class IndustrialDesignWorkflowService:
                 publish_assets=False,
             )
             if image_edit_result:
-                self._apply_image_edit_result(outputs, image_edit_result)
+                self._apply_image_edit_result(
+                    outputs,
+                    image_edit_result,
+                    output_kind=self._image_edit_output_kind(request),
+                )
 
         missing_assets = self._missing_required_asset_outputs(
             request,
@@ -1230,7 +1251,7 @@ class IndustrialDesignWorkflowService:
                 (
                     item.get("detail")
                     for item in diagnostics
-                    if item.get("level") == "warning" and item.get("detail")
+                    if item.get("level") in {"warning", "error"} and item.get("detail")
                 ),
                 None,
             )
@@ -1665,6 +1686,52 @@ class IndustrialDesignWorkflowService:
                 cleaned_lines.append(stripped)
         return '\n'.join(cleaned_lines) if cleaned_lines else clean
 
+    @staticmethod
+    def _product_common_sense_constraints(project_name: str, text: str) -> list[str]:
+        source = f"{project_name} {text}".lower()
+        constraints = [
+            "PRODUCT COMMON SENSE — UNIVERSAL: The product must obey real gravity, real contact points, physically plausible scale, functional parts in believable positions, and matching contact shadows. No floating object, no surface clipping, no merged parts, no impossible intersections, no arbitrary decorative holes, no random components.",
+        ]
+        if any(keyword in source for keyword in ("手机支架", "手机架", "phone stand", "mobile phone stand")):
+            constraints.extend([
+                "PHONE STAND COMMON SENSE: the phone must rest on the cradle or front lip, with visible contact points.",
+                "The phone must not intersect, clip through, float above, or unrealistically merge with the stand.",
+                "Keep a realistic smartphone-to-stand size ratio, stable support angle, and physically plausible shadows.",
+                "If the phone stand has a rabbit-shaped or cartoon back design, that is the back of the stand, not a separate object. The phone sits on the front cradle of the same stand body.",
+                "The stand must have a stable base or clip mechanism, with a front retaining lip that holds the phone bottom edge. The phone leans back against the stand body at a 65-75 degree angle.",
+            ])
+        if any(keyword in source for keyword in ("沙发", "椅", "座椅", "凳", "sofa", "chair", "seat")):
+            constraints.extend([
+                "SEATING COMMON SENSE: seat cushions aligned on the frame, backrest connected to the seat, armrests attached on both sides when present, legs or base fully touching the floor.",
+                "Upholstery thickness, seams, cushion compression, and stitching must be believable; no separated floating cushions, no melted soft parts, no unsupported backrest.",
+            ])
+        if any(keyword in source for keyword in ("桌", "茶几", "餐桌", "边几", "table", "desk")):
+            constraints.extend([
+                "TABLE COMMON SENSE: tabletop is level and has believable thickness; legs connect to the underside of the tabletop; all legs touch the floor.",
+                "Objects on the tabletop must rest on the surface and never penetrate through it; table edges and corners must be consistent in perspective.",
+            ])
+        if any(keyword in source for keyword in ("柜", "衣柜", "书柜", "机柜", "控制柜", "cabinet", "wardrobe", "bookcase")):
+            constraints.extend([
+                "CABINET COMMON SENSE: doors drawers and shelves aligned to the cabinet grid, visible panel thickness, hinges and handles placed on usable edges.",
+                "Cabinet stands vertically with a stable base; door gaps, drawer rails, ventilation slots, and service panels must be logically placed.",
+            ])
+        if any(keyword in source for keyword in ("灯", "台灯", "落地灯", "lamp", "light")):
+            constraints.extend([
+                "LAMP COMMON SENSE: light source located inside the lamp head or shade, stable base and visible support arm, cable or switch placed plausibly.",
+                "Emitted light direction must match cast shadows; lamp head, arm, and base must be mechanically connected, not floating.",
+            ])
+        if any(keyword in source for keyword in ("电源", "储能", "充电", "电池", "设备", "充电宝", "power station", "battery", "charger")):
+            constraints.extend([
+                "ELECTRONIC DEVICE COMMON SENSE: ports aligned on the front panel, screen and buttons flush with the housing, handle attached to the main body.",
+                "vents follow a consistent grid; cables plug into ports and never pass through the shell; housing thickness, bevels, seams, and rubber feet must be manufacturable.",
+            ])
+        if any(keyword in source for keyword in ("工业", "机械", "钣金", "装备", "industrial", "machine", "sheet metal")):
+            constraints.extend([
+                "INDUSTRIAL PRODUCT COMMON SENSE: bolts hinges vents access panels and reinforcement ribs placed logically; sheet metal bends and assembly seams visible.",
+                "The structure must look manufacturable: consistent wall thickness, plausible fasteners, service access, stable mounting, and no random decorative mechanical noise.",
+            ])
+        return constraints
+
     def _build_image_prompt(
         self,
         project_name: str,
@@ -1675,6 +1742,7 @@ class IndustrialDesignWorkflowService:
         is_propaganda_stage = request.options.generate_render
         user_desc = self._extract_user_description(request.text or "")
         is_furniture_scene = self._looks_like_furniture_scene(request.industry, project_name, user_desc)
+        product_constraints = self._product_common_sense_constraints(project_name, request.text or "")
 
         # 如果用户已提供详细设计稿描述（含多视图/材质/尺寸），直接用做 prompt
         if user_desc and any(kw in user_desc for kw in ('设计稿','正视图','侧视图','顶视图','设计图','爆炸图','设计说明','三视图')):
@@ -1707,21 +1775,38 @@ class IndustrialDesignWorkflowService:
         elif is_propaganda_stage:
             if is_furniture_scene:
                 lines = [
-                    f"Commercial-grade home furniture visualization for project '{project_name}'.",
-                    f"Industry: {design_spec['industry']}.",
-                    "Style: premium furniture product render, soft home-lifestyle atmosphere, realistic material texture, refined surface detail.",
-                    "Quality: high resolution, accurate color, natural shadow, stable composition, no decorative noise.",
-                    "Lighting: studio softbox lighting with subtle home ambience, true-to-life material appearance.",
-                    "Output: marketing-quality furniture visual suitable for design review and client presentation.",
+                    f"""DETAILED IMAGE GENERATION BRIEF: Create a commercial-grade home furniture advertising visual for project '{project_name}'. This is a text-to-image generation task. The output must look like a premium furniture catalog photograph, not a fantasy illustration, not an abstract concept, not a technical blueprint. The scene should feel like a real home environment with warm, inviting atmosphere.""",
+                    f"""INDUSTRY CONTEXT: {design_spec['industry']}. Apply industry-appropriate visual conventions for furniture: warm lifestyle atmosphere, natural textures, realistic wood grain, soft fabric drape, comfortable proportions, precise joinery details. The setting should feel like a well-staged interior design photograph, not a sterile showroom.""",
+                    """SUBJECT DESCRIPTION: The furniture product is the sole visual hero. Render it with its exact intended form, silhouette, structure, proportions, material finish, surface texture, color placement, decorative motif, functional seams, visible joinery, edge thickness, leg/base design, handle/hardware details, and any other identifiable design feature. The product must be a complete, coherent, fully-realized furniture piece, not a concept sketch, not a wireframe, not a partial assembly, not a technical drawing.""",
+                    """PRODUCT STRUCTURE: Maintain the furniture product's structural integrity. Keep stable legs or base with solid ground contact, visible joinery (mortise and tenon, dovetail, dowel, or metal bracket as appropriate), functional doors/drawers/shelves with correct proportions, balanced weight distribution, believable wall thickness for the material (18-25mm for wood panels, 3-5mm for metal tubing), smooth edges with appropriate chamfer or radius, no twisted or warped geometry, no unsupported cantilevered spans, no merged or intersecting parts. Every functional element (hinges, handles, drawer slides, shelf supports, leveling feet) must be at the correct relative position and size.""",
+                    """PHYSICAL PLAUSIBILITY — MANDATORY: The furniture must obey gravity and real-world physics. The product must sit solidly on a flat floor surface with all legs/base in full contact. Every contact point must have a matching contact shadow with correct density and direction — darker near the contact line, fading outward. The product must not float, hover, or clip through the floor. No impossible cantilever angles, no intersecting surfaces, no merged components. The shadow must be consistent with the direction of the key light source. For freestanding pieces: full base contact with the floor. For wall-mounted pieces: show the mounting interface or bracket against the wall. For multi-module pieces: show correct alignment and connection between modules.""",
+                    """POSTER COMPOSITION: Hero product prominently displayed, three-quarter front angle showing the most visually informative view. Centered or slightly off-center layout (rule of thirds). Premium background with controlled depth gradient — a tastefully styled room corner, a minimalist lifestyle scene, or a clean studio cyclorama. Enough clean negative space (approximately 30% of the canvas) for future text overlay. Commercial furniture catalog hierarchy: product → scene → supporting decor → background. No clutter, no unnecessary decorative elements that compete with the product. Add 2-3 carefully selected complementary decor items (a small plant, a book, a cushion, a lamp) only if they enhance the product's context without blocking its silhouette.""",
+                    """SCENE DESIGN: Create a warm, inviting home interior or a premium studio showroom scene. Use a matching interior style: modern minimal, Scandinavian, mid-century, industrial loft, or classic traditional, corresponding to the furniture's design language. The room should have subtle background elements: a wall with baseboard, a window with soft daylight, a floor (wood plank, tile, or neutral carpet) with appropriate texture. Color palette should complement the furniture — neutral walls, warm wood tones, subtle accent colors. The background must remain subordinate to the furniture: the product occupies the visual foreground. No distracting patterns, no busy wallpapers, no unrelated furniture or objects that dilute the hero product. The atmosphere should feel inviting and aspirational, like a real interior design photograph.""",
+                    """MATERIAL AND SURFACE DETAIL: Render the furniture with its correct material properties. For solid wood: visible grain direction, natural pore texture, subtle color variation between heartwood and sapwood, appropriate sheen from the finish (matte, satin, or gloss). For wood veneer: continuous grain pattern, visible seam lines at panel edges, consistent color. For paint: smooth continuous finish, no orange peel, no brush strokes, no drips, correct sheen level. For metal hardware: appropriate reflectivity — brushed nickel has directional fine scratches, polished chrome has sharp mirror reflections, matte black has diffuse texture. For glass: edge thickness visible, subtle reflections at glancing angles, slight transparency. For fabric upholstery: visible weave pattern, soft folding and draping, no sharp creases, correct seam alignment, button tufting or stitching detail where applicable. For leather: natural grain texture, warm sheen, subtle stretch marks at seat corners. No waxy skin-like appearance, no dirty noise artifacts, no cartoon clay shading, no plastic toy look.""",
+                    """LIGHTING — PRECISE SETUP: Natural-feeling interior lighting with a combination of ambient and directional light. Large soft window light from camera-left as the key light creating a soft 2:1 to 3:1 lighting ratio. Warm ambient fill from the room interior at 30-40% intensity to open up shadows. Subtle accent light from back-right or back-top to separate the furniture from the background. Warm color temperature (3500-4500K) for residential feel, slightly cooler (5000-5500K) for showroom or studio look. Soft, realistic contact shadow directly under the product with correct density gradient. For rooms with windows: visible window light direction, soft shadow falloff, subtle volumetric light beams if appropriate. No overexposed highlight clipping, no harsh direct flash look, no random colored light gels, no dramatic fashion-style lighting that distorts the product's natural appearance.""",
+                    """CAMERA AND LENS: Full-frame architectural/product photography lens, 35-50mm focal length for furniture to capture the full piece without distortion while maintaining natural perspective. For larger pieces (sofas, beds, cabinets): 35-40mm. For smaller pieces (tables, chairs, sideboards): 50-70mm. Aperture setting f/8 to f/11 for sufficient depth of field to keep the entire furniture piece in sharp focus. Camera height at approximately 120-150cm from the floor (human eye level) for a natural room-view perspective. For tables: slightly elevated angle (10-15 degrees above horizontal) to show the tabletop surface. Sharp focus on the product with critical edge definition. No wide-angle distortion, no fisheye effect, no extreme tilt-shift. The camera-to-product distance should feel natural, approximately 2-3 meters for a sofa, 1.5-2 meters for a chair or table.""",
+                    """GRAPHIC AND LAYOUT RULES: Leave clean negative space (approximately 30% of the canvas, typically in the upper or left area) reserved for future headline text, product name, tagline, and brand logo. Do NOT generate readable brand text, fake logos, QR codes, watermarks, random letters, incorrect annotations, unreadable typography, or messy graphic elements. If text appears unintentionally, it should be non-specific decorative shapes only. No barcode, no price tag, no certification marks, no size labels. The image should be a clean furniture hero visual ready for a graphic designer to add text overlay.""",
+                    """QUALITY TARGET: Premium furniture catalog hero image quality. Photorealistic product appearance with correct geometry, lighting, and material. Warm, inviting atmosphere with high detail and sharp focus. Market-ready retail visual suitable for furniture catalog, ecommerce listing, design portfolio, or client presentation. Professional interior photography quality with studio-level lighting, precise shadow handling, and accurate color rendition. The final image should look like it was shot in a real home or a professional interior photography studio by an experienced architectural photographer, not generated by AI.""",
+                    *product_constraints,
+                    """NEGATIVE PROMPT — EXCLUDE: deformed geometry, twisted or warped frame, bloated proportions, shrunken parts, missing parts (legs, handles, doors), random extra parts, furniture floating above floor with no ground contact, missing contact shadow, shadow direction inconsistent with window light, duplicated product, extra furniture not described, unreadable text, watermark, fake logo, barcode, QR code, certification marks, cluttered messy background, busy patterns, over-stylized fantasy scene, cartoon style, illustration style, oil painting texture, watercolor effect, sketch lines, grainy noise, chromatic aberration, lens flare artifacts, motion blur, double exposure, HDR overprocessing, oversaturated colors, color cast, skin-like texture on wood, clay-like shading, plastic toy appearance, cheap furniture look, DIY construction appearance, damaged or worn furniture, construction site background, warehouse background, exterior outdoor scene.""",
                 ]
             else:
                 lines = [
-                    f"Commercial-grade industrial product visualization for project '{project_name}'.",
-                    f"Industry: {design_spec['industry']}.",
-                    "Style: professional product rendering, realistic material texture, refined surface detail, presentation-ready.",
-                    "Quality: high resolution, accurate color, natural shadow, stable composition, no decorative noise.",
-                    "Lighting: studio softbox lighting, subtle environment reflection, true-to-life material appearance.",
-                    "Output: marketing-quality visual suitable for design review and client presentation.",
+                    f"""DETAILED IMAGE GENERATION BRIEF: Create a commercial-grade industrial product advertising visual for project '{project_name}'. This is a text-to-image generation task. The output must look like a premium product marketing photograph, not a fantasy illustration, not an abstract concept, not a technical blueprint. The scene should feel like a professional product photography studio with clean, precise visual presentation.""",
+                    f"""INDUSTRY CONTEXT: {design_spec['industry']}. Apply industry-appropriate visual conventions. For consumer electronics: clean tech aesthetic, matte materials, precise edges, subtle reflections. For industrial equipment: robust engineering look, metallic surfaces, technical precision, mechanical detailing. For medical devices: clean white aesthetic, soft lighting, ergonomic shapes. For automotive parts: high-gloss painted surfaces, precise machined edges, mechanical complexity.""",
+                    """SUBJECT DESCRIPTION: The industrial product is the sole visual hero. Render it with its exact intended form, silhouette, structure, proportions, material finish, surface texture, color placement, functional seams, visible edge thickness, support feet, joints, mounting holes, vents, buttons, ports, indicators, heat sinks, fasteners, and any other identifiable design feature. The product must be a complete, coherent, fully-realized industrial product, not a concept sketch, not a wireframe, not a partial assembly, not a technical drawing.""",
+                    """PRODUCT STRUCTURE: Maintain the product's structural integrity. Keep a stable base, visible support surface, rounded safe edges, manufacturable wall thickness, believable injection-molded plastic, die-cast metal, machined aluminum, or silicone material finish. Clean parting lines, no melted surface, no twisted or warped geometry, no random extra parts, no bloated or shrunken proportions. For assembled products: show correct alignment between components, consistent gap tolerances, believable fastener placement (screws, bolts, snap-fits). Every functional element (buttons, vents, indicators, ports, hinges, joints, heat sinks, mounting brackets) must be at the correct relative position and size. The product should look like it could be manufactured, not like a free-form sculpture.""",
+                    """PHYSICAL PLAUSIBILITY — MANDATORY: All objects must obey gravity and real-world physics. Every object must sit on a flat surface or in a mechanically believable mounting position. Every contact point must have a matching contact shadow with correct density and direction — darker near the contact line, fading outward. The product must not float, hover, or clip through the surface. Avoid impossible cantilever angles, intersecting objects, merged surfaces, or objects that lack a visible support structure. The shadow must be consistent with the direction of the key light source. For wall-mounted products: show the mounting interface or bracket. For tabletop products: show the full base contact with the surface. For handheld products: show them resting on a surface or in a stand, not floating in mid-air.""",
+                    *product_constraints,
+                    """POSTER COMPOSITION: Hero product prominently displayed, three-quarter front angle is the default (choose the angle that best shows the product's key features and functional surfaces). Centered or slightly off-center layout (rule of thirds). Premium background with controlled depth gradient — a clean studio cyclorama, a subtle gradient backdrop, or a minimal tech environment. Enough clean negative space (approximately 40% of the canvas) reserved for future headline text, technical specifications, selling points, and brand logo. Commercial product marketing hierarchy: product → key features → supporting visuals → background. No clutter, no unnecessary decorative elements that compete with the product.""",
+                    """SCENE DESIGN: Use a modern desk, minimal tech environment, or clean studio cyclorama scene. For consumer products: place the product on a clean tabletop or architectural surface (concrete, wood, acrylic, marble, brushed metal) that complements the product's color and material. For industrial products: use a neutral workshop, lab bench, or technical background. Add only props that directly support the product story (e.g., a phone on a phone stand, a cable on a charger, a tool next to a device) and do not block the product silhouette. Keep the background subordinate to the product — the product should occupy the visual foreground. No distracting background patterns, no busy textures, no unrelated objects.""",
+                    """MATERIAL AND SURFACE DETAIL: Render the product with its correct material properties. For ABS plastic: subtle matte micro-texture, soft specular highlights, no waxy or greasy sheen, clean bevels at edges. For silicone or rubber: soft matte finish, slight surface grip texture, no reflections. For metal: appropriate reflectivity — brushed aluminum has directional anisotropic reflections, polished steel has sharp mirror-like reflections, anodized surfaces have diffuse colored reflections, machined surfaces have visible tool marks. For glass: transparency, edge refraction, subtle reflections at glancing angles. For painted surfaces: smooth continuous finish, no orange peel, no brush strokes, correct sheen (matte/satin/gloss). For carbon fiber: visible weave pattern, directional light reflection. No waxy skin-like appearance, no dirty noise artifacts, no cartoon clay shading, no plastic toy look unless explicitly requested as a style.""",
+                    """LIGHTING — PRECISE SETUP: Large softbox as the key light positioned at upper front-left 45-degree angle, creating a natural 3:1 lighting ratio (key light 3x brighter than fill). Soft fill light from front-right at 30% intensity to open up shadows. Subtle rim light or edge light from back-right or back-top to separate the product from the background and highlight the product silhouette. Controlled reflections on glossy surfaces (reflection diffusers or bounce cards implied). Soft, realistic contact shadow directly under the product with correct density gradient — darker near the contact line, fading outward. No overexposed highlight clipping, no harsh direct flash look, no random neon glow colors unless the product has built-in LEDs. For products with screens: show the screen as dark glass with subtle reflections, not a bright glowing display that competes with the product. For products with indicators: show subtle LED glow, not overpowering light sources.""",
+                    """CAMERA AND LENS: Full-frame product photography lens, 70-85mm focal length for natural perspective compression without distortion. Aperture setting f/4 to f/5.6 for sufficient depth of field to keep the entire product in sharp focus. Eye-level to slightly elevated viewpoint (15-25 degrees above horizontal) for a natural product catalog look. Sharp focus on the product with critical edge definition. Background may be softly defocused (bokeh) only if it does not blur the product outline. No wide-angle distortion, no fisheye effect, no extreme macro perspective. The camera-to-product distance should feel natural, approximately 1-1.5 meters for a typical product.""",
+                    """GRAPHIC AND LAYOUT RULES: Leave clean blank area (approximately 40% of the canvas, typically in the upper or left area) reserved for future headline text, technical specifications, selling points, and brand logo. Do NOT generate readable brand text, fake logos, QR codes, watermarks, random letters, incorrect annotations, unreadable typography, or messy graphic elements. If text appears unintentionally, it should be non-specific decorative shapes only. No barcode, no price tag, no certification marks. The image should be a clean product hero visual ready for a graphic designer to add text overlay.""",
+                    """QUALITY TARGET: Premium ecommerce hero image quality. Realistic physical product appearance with correct geometry, lighting, and material. Clean composition with high detail and sharp focus. Market-ready advertising visual suitable for Amazon listing, company catalog, trade show display, or client presentation. Professional product photography quality with studio-level lighting, precise shadow handling, and accurate color rendition. The final image should look like it was shot in a professional photo studio by an experienced product photographer, not generated by AI.""",
+                    *product_constraints,
+                    """NEGATIVE PROMPT — EXCLUDE: deformed geometry, twisted or warped body, melted plastic, bloated proportions, shrunken parts, missing parts, random extra parts, unnatural holes, phone clipping through or penetrating the stand surface, floating product with no ground contact, impossible cantilever, missing contact shadow, shadow direction inconsistent with key light, duplicated product, extra objects not in the prompt, unreadable text, watermark, fake logo, barcode, QR code, certification marks, messy background, over-stylized fantasy scene, cartoon style, illustration style, oil painting texture, watercolor effect, sketch lines, grainy noise, chromatic aberration, lens flare artifacts, motion blur, double exposure, HDR overprocessing, oversaturated colors, color cast, skin-like texture on non-organic products, clay-like shading, plastic toy appearance, cheap product look, DIY prototype appearance, damaged or worn product, construction site background, warehouse background.""",
                 ]
         else:
             lines = [
@@ -1778,16 +1863,15 @@ class IndustrialDesignWorkflowService:
                 model=image_model,
                 provider=image_provider,
             )
-        # 默认固定走自建 ComfyUI（FLUX.1-schnell），不自动切换其他供应商。
         return await self.ai_model_gateway.generate_design_image(
             prompt=prompt,
             images=images,
             optimize_prompt=optimize_prompt,
-            provider="comfyui",
+            provider="nodapi",
         )
 
     def _image_provider_label(self) -> str:
-        return "本地 ComfyUI"
+        return "NodAPI"
 
     async def _try_generate_enhanced_image(
         self,
@@ -1852,7 +1936,7 @@ class IndustrialDesignWorkflowService:
             diagnostics.append({
                 "level": "error",
                 "title": "图片编辑失败",
-                "detail": "宣发图必须基于参考设计图编辑生成，本次图片编辑失败。",
+                "detail": f"宣发图必须基于参考设计图编辑生成，本次图片编辑失败：{exc.message}",
             })
             return None
 
@@ -1872,18 +1956,63 @@ class IndustrialDesignWorkflowService:
         return response
 
     @staticmethod
+    def _image_edit_mode(request: IndustrialDesignWorkflowRequest) -> str:
+        raw = request.context.get("imageEditMode")
+        mode = str(raw).strip().lower() if raw is not None else ""
+        aliases = {
+            "poster": "poster",
+            "promotion": "poster",
+            "render": "poster",
+            "scene": "scene_fusion",
+            "scene_fusion": "scene_fusion",
+            "fusion": "scene_fusion",
+            "exploded": "exploded",
+            "explosion": "exploded",
+            "explode": "exploded",
+            "fake_3d": "fake_3d",
+            "faux_3d": "fake_3d",
+            "3d": "fake_3d",
+            "plan_2d": "plan_2d",
+            "2d_plan": "plan_2d",
+            "2d": "plan_2d",
+            "orthographic": "plan_2d",
+        }
+        if mode in aliases:
+            return aliases[mode]
+        if request.options.generate_explosion:
+            return "exploded"
+        return "poster"
+
+    @classmethod
+    def _image_edit_output_kind(
+        cls,
+        request: IndustrialDesignWorkflowRequest,
+    ) -> str:
+        return "explosion" if cls._image_edit_mode(request) == "exploded" else "render"
+
+    @staticmethod
     def _apply_image_edit_result(
         outputs: dict[str, JSONValue],
         image_edit_result: dict[str, str],
+        *,
+        output_kind: str = "render",
     ) -> None:
-        outputs["enhancedImageAssetId"] = image_edit_result["assetId"]
-        outputs["enhancedImage"] = image_edit_result["url"]
-        if image_edit_result.get("responseAssetId"):
-            outputs["enhancedImageResponseAssetId"] = image_edit_result[
-                "responseAssetId"
-            ]
-        outputs["renderPngAssetId"] = image_edit_result["assetId"]
-        outputs["renderPng"] = image_edit_result["url"]
+        if output_kind == "explosion":
+            outputs["explosionPngAssetId"] = image_edit_result["assetId"]
+            outputs["explosionPng"] = image_edit_result["url"]
+            if image_edit_result.get("responseAssetId"):
+                outputs["explosionResponseAssetId"] = image_edit_result[
+                    "responseAssetId"
+                ]
+        else:
+            outputs["enhancedImageAssetId"] = image_edit_result["assetId"]
+            outputs["enhancedImage"] = image_edit_result["url"]
+            if image_edit_result.get("responseAssetId"):
+                outputs["enhancedImageResponseAssetId"] = image_edit_result[
+                    "responseAssetId"
+                ]
+            outputs["renderPngAssetId"] = image_edit_result["assetId"]
+            outputs["renderPng"] = image_edit_result["url"]
         outputs["imageProvider"] = "image2-edit"
 
     @staticmethod
@@ -1966,16 +2095,59 @@ class IndustrialDesignWorkflowService:
         request: IndustrialDesignWorkflowRequest,
         design_spec: dict[str, JSONValue],
     ) -> str:
+        user_desc = self._extract_user_description(request.text or "")
+        product_constraints = self._product_common_sense_constraints(project_name, request.text or "")
+        image_edit_mode = self._image_edit_mode(request)
+        mode_briefs = {
+            "poster": f"""POSTER IMAGE EDITING BRIEF: Create a realistic commercial advertising poster for project '{project_name}'. This is an image-to-image editing task: take the uploaded reference product image as the identity source and composite it into a premium ecommerce advertising poster. The output must look like a realistic product marketing visual, not fantasy art, not illustration, not abstract concept.""",
+            "scene_fusion": f"""SCENE FUSION IMAGE EDITING BRIEF: Create a realistic scene-fusion product image for project '{project_name}'. This is a strict image-to-image editing task. Extract the exact product from the reference image, preserve its identity, and place the same product into a believable real-world usage scene. The scene may change; the product must not be redesigned.""",
+            "exploded": f"""EXPLODED ASSEMBLY IMAGE EDITING BRIEF: Create a flat 2D exploded assembly diagram for project '{project_name}'. This is a strict image-to-image editing task. Use the reference image as the only source of the product's geometry, proportions, materials, and part relationships. Decompose the same product into visible functional layers and components, with clean separation, connector guide lines, and assembly order. Do not invent a new product.""",
+            "fake_3d": f"""FAUX 3D IMAGE EDITING BRIEF: Create a 2D faux-3D product render for project '{project_name}'. This is a strict image-to-image editing task. Preserve the exact product identity from the reference image, then present it in an isometric or three-quarter product-render angle with controlled industrial lighting. This is not real 3D mesh generation and not text-to-image redesign.""",
+            "plan_2d": f"""2D ORTHOGRAPHIC ENGINEERING DRAWING BRIEF: Create a flat 2D multi-view engineering drawing sheet for project '{project_name}'. This is a strict image-to-image editing task. Use the uploaded reference image as the only source of the product identity, silhouette, proportions, visible structure, materials, and feature placement. Convert the same object into clean orthographic views with dimensions. Do not redesign, do not invent a different product, and do not create a lifestyle scene.""",
+        }
+        mode_rules = {
+            "poster": """MODE-SPECIFIC GOAL: Build a poster-ready hero image. Keep the same product as the reference, create a premium advertising composition, and reserve clean blank space for future graphic text.""",
+            "scene_fusion": """MODE-SPECIFIC GOAL: Composite the same product into a realistic usage environment. Match perspective, scale, surface contact, lighting direction, color temperature, and shadow softness between the extracted product and the new scene. The product must look physically present in the scene, not pasted on top.""",
+            "exploded": """MODE-SPECIFIC GOAL: Convert the reference product into a clear 2D exploded technical diagram. Separate the original product into plausible visible parts: outer shell, panels, drawers, doors, supports, fasteners, brackets, internal layers, functional modules, gaskets, hinges, rails, shelves, electronic modules, or other category-appropriate components. Keep every component derived from the original silhouette and structure. Use orthographic or isometric technical layout, white background, thin connector lines, small numbered callout circles, clean spacing, and no photorealistic lifestyle background.""",
+            "fake_3d": """MODE-SPECIFIC GOAL: Re-render the reference product as a single coherent 2D image that only imitates 3D depth through perspective, shadow, ambient occlusion, bevel highlights, and material shading. Keep the same recognizable design, colors, part positions, and proportions from the reference. Do not create CAD, STEP, STL, GLB, wireframe mesh, or a different product.""",
+            "plan_2d": """MODE-SPECIFIC GOAL: Convert the same reference product into a 2D orthographic multi-view drawing sheet. Show front view, rear view, left side view, right side view, top view, and bottom view of the same object, all aligned to a consistent scale. Add dimension lines, centerlines, visible/hidden edges, material callouts, structure labels, and two small detail insets if useful. The drawing must show only this one product object on a clean white technical drafting background.""",
+        }
+        if image_edit_mode == "plan_2d":
+            lines = [
+                mode_briefs["plan_2d"],
+                mode_rules["plan_2d"],
+                f"""INDUSTRY CONTEXT: {design_spec['industry']}. Use category-appropriate engineering drafting conventions and realistic dimensions.""",
+                """SUBJECT LOCK — CRITICAL: the reference image is the sole identity source. Preserve the original product silhouette, proportions, visible structure, material separation, color placement, handles, ports, hinges, panels, shelves, supports, wheels, frame tubes, fasteners, decorative motifs, and all recognizable design features. Do NOT redesign the product. Do NOT simplify it into a generic object. Do NOT create a new variant.""",
+                """ORTHOGRAPHIC VIEW REQUIREMENT: output a flat 2D technical sheet containing front view, rear view, left side view, right side view, top view, and bottom view of the exact same object. Every view must correspond to the same product geometry. Views must be aligned on a clean grid with consistent scale and shared centerlines. Include dimension chains for overall length, width, height, depth, key hole spacing, shelf spacing, tube diameter, panel thickness, wheel diameter, or other category-relevant dimensions.""",
+                """DRAWING STYLE: crisp black and dark-gray vector-like linework on a white drafting background, thin dimension lines, arrowheads, dashed hidden edges, center marks, small callout bubbles, restrained material labels. Use subtle grayscale fills only to separate materials if necessary. No photorealistic shadows, no lifestyle scene, no poster layout, no decorative background, no perspective camera, no 3D render.""" ,
+                """PRODUCT CONSISTENCY: if the source is a product render or poster, infer the missing orthographic faces from the visible product while keeping the same identity. If the source already contains a multi-view design sheet, preserve the same object and cleanly redraw the views; do not treat each view as a separate product. If any face is ambiguous, infer conservatively from the reference instead of inventing decorative parts.""",
+                *product_constraints,
+                """NEGATIVE PROMPT — EXCLUDE: different product, redesigned product, generic replacement object, multiple unrelated variants, lifestyle background, room scene, desk scene, human model, poster text, marketing headline, photorealistic perspective render, 3D software viewport, exploded parts, random holes, inconsistent views, mismatched front and side view, impossible dimensions, warped geometry, unreadable fake text, watermark, logo, QR code, barcode, messy annotations.""",
+            ]
+            if user_desc:
+                lines.append(f"""USER INTENT: {user_desc}. Use this only to understand the product category and drafting emphasis; do not override the reference image identity.""")
+            return "\n".join(item for item in lines if item)
         lines = [
-            f"基于参考图做图片编辑和场景融合，项目名称：{project_name}",
-            f"所属行业：{design_spec['industry']}",
-            "必须保留参考图中的主体产品、外形轮廓、结构比例、关键部件和材质特征，不要重新设计一个新产品。",
-            "只允许把参考图主体融合到真实使用场景中，补充空间背景、光影、材质细节和商业摄影质感。",
-            "如果参考图是设计版面或多视图图纸，请提取其中的主产品形态作为同一产品，不要改变成其他款式。",
-            "输出为产品场景融合宣发图，主体应与参考图明显一致，适合客户展示和营销使用。",
-            "不要添加无关文字、尺寸标注、夸张广告元素、错误结构或过度艺术化背景。",
-            request.text or "",
+            mode_briefs.get(image_edit_mode, mode_briefs["poster"]),
+            mode_rules.get(image_edit_mode, mode_rules["poster"]),
+            f"""INDUSTRY CONTEXT: {design_spec['industry']}. Apply industry-appropriate visual conventions. For consumer electronics: clean tech aesthetic, matte materials, precise edges. For furniture: warm lifestyle, natural textures, realistic wood grain. For industrial equipment: robust engineering look, metallic surfaces, technical precision.""",
+            """SUBJECT LOCK — CRITICAL: the reference image is the sole identity source. Preserve every recognizable design feature of the reference product: exact silhouette, outer profile, structural proportions, color placement, material finish, surface texture, decorative motif, functional seams, visible edge thickness, support feet, joints, mounting holes, vents, buttons, ports, logo position, and any other identifiable detail. Do NOT redesign the product. Do NOT invent a different product. Do NOT create a new variant. Do NOT change the main geometry. The only allowed changes are mode-specific presentation changes: camera angle, background environment, lighting setup, exploded spacing, poster composition layout, or scene composition.""",
+            """REFERENCE IMAGE USAGE: Cut out or isolate the original product subject from the reference image. If the reference is a design specification sheet, multi-view orthographic board, or technical drawing, identify the main product form (the assembled product, not individual views) and reconstruct the same product as one coherent 3D object. Keep reference fidelity at maximum. The reference image controls the product identity; the editing prompt controls the environment, camera, lighting, poster layout, and scene composition. Do not let the editing prompt override the product identity from the reference.""",
+            """PRODUCT STRUCTURE: Maintain the original product's structural integrity. Keep a stable base, visible support surface, front retaining lip or cradle groove when applicable, rounded safe edges, manufacturable wall thickness, believable injection-molded plastic, die-cast metal, or silicone material finish. Clean parting lines, no melted surface, no twisted or warped geometry, no random extra parts, no bloated or shrunken proportions. Every functional element (buttons, vents, indicators, ports, hinges, joints) must be at the correct relative position and size.""",
+            """PHYSICAL PLAUSIBILITY — MANDATORY: All objects must obey gravity and real-world physics. Every object must sit on a flat surface or in a mechanically believable mounting position. Every contact point must have a matching contact shadow with correct density and direction. The product must not float, hover, or clip through the surface. Avoid impossible cantilever angles, intersecting objects, merged surfaces, or objects that lack a visible support structure. The shadow must be consistent with the direction of the key light source. For wall-mounted products, show the mounting interface or bracket. For tabletop products, show the full base contact with the surface.""",
+            *product_constraints,
+            """POSTER COMPOSITION: Hero product prominently displayed, three-quarter front angle is the default (choose the angle that best shows the product's key features). Centered or slightly off-center layout (rule of thirds). Premium background with controlled depth gradient. Enough clean negative space (approximately 40% of the canvas) reserved for future headline text, selling points, and brand logo. Commercial ecommerce poster hierarchy: product → headline area → supporting visuals → background. No clutter, no unnecessary decorative elements that compete with the product.""",
+            """SCENE DESIGN: Use a modern desk, minimal lifestyle environment, or clean studio cyclorama scene. For consumer products: place the product on a clean tabletop or architectural surface (concrete, wood, acrylic, marble) that complements the product's color and material. For industrial products: use a neutral workshop or technical background. Add only props that directly support the product story (e.g., a phone on a phone stand, a cable on a charger) and do not block the product silhouette. Keep the background subordinate to the product — the product should occupy the visual foreground. No distracting background patterns, no busy textures, no unrelated objects.""",
+            """MATERIAL AND SURFACE DETAIL: Render the product with its correct material properties. For ABS plastic: subtle matte micro-texture, soft specular highlights, no waxy or greasy sheen, clean bevels at edges. For silicone or rubber: soft matte finish, slight surface grip texture, no reflections. For metal: appropriate reflectivity — brushed aluminum has directional anisotropic reflections, polished steel has sharp mirror-like reflections, anodized surfaces have diffuse colored reflections. For glass: transparency, edge refraction, subtle reflections at glancing angles. For painted surfaces: smooth continuous finish, no orange peel, no brush strokes. For wood: visible grain direction, subtle pore texture, natural color variation. For fabric: visible weave pattern, soft folding, no sharp creases. No waxy skin-like appearance, no dirty noise artifacts, no cartoon clay shading, no plastic toy look unless explicitly requested as a style.""",
+            """LIGHTING — PRECISE SETUP: Large softbox as the key light positioned at upper front-left 45-degree angle, creating a natural 3:1 lighting ratio (key light 3x brighter than fill). Soft fill light from front-right at 30% intensity to open up shadows. Subtle rim light or edge light from back-right or back-top to separate the product from the background. Controlled reflections on glossy surfaces (reflection diffusers or bounce cards implied). Soft, realistic contact shadow directly under the product with correct density gradient — darker near the contact line, fading outward. No overexposed highlight clipping, no harsh direct flash look, no random neon glow colors unless the product has built-in LEDs. For products with screens: show the screen as dark glass with subtle reflections, not a bright glowing display that competes with the product.""",
+            """CAMERA AND LENS: Full-frame product photography lens, 70-85mm focal length for natural perspective compression without distortion. Aperture setting f/4 to f/5.6 for sufficient depth of field to keep the entire product in sharp focus. Eye-level to slightly elevated viewpoint (15-25 degrees above horizontal) for a natural product catalog look. Sharp focus on the product with critical edge definition. Background may be softly defocused (bokeh) only if it does not blur the product outline. No wide-angle distortion, no fisheye effect, no extreme macro perspective. The camera-to-product distance should feel natural, approximately 1-1.5 meters for a typical product.""",
+            """GRAPHIC AND LAYOUT RULES: Leave clean blank area (approximately 40% of the canvas, typically in the upper or left area) reserved for future headline text, selling points, and brand logo. Do NOT generate readable brand text, fake logos, QR codes, watermarks, random letters, incorrect annotations, unreadable typography, or messy graphic elements. If text appears unintentionally, it should be non-specific decorative shapes only. No barcode, no price tag, no certification marks. The poster should be a clean product hero image ready for a graphic designer to add text overlay.""",
+            """QUALITY TARGET: Premium ecommerce hero image quality. Realistic physical product appearance with correct geometry, lighting, and material. Clean composition with high detail and sharp focus. Market-ready advertising visual suitable for Amazon listing, Shopify storefront, or brand catalog. Professional product photography quality with studio-level lighting, precise shadow handling, and accurate color rendition. The final image should look like it was shot in a professional photo studio, not generated by AI.""",
+            *product_constraints,
+            """NEGATIVE PROMPT — EXCLUDE: wrong product design, redesigned product, different product variant, deformed geometry, twisted or warped body, melted plastic, bloated proportions, shrunken parts, missing parts, random extra parts, unnatural holes, phone clipping through or penetrating the stand surface, floating product with no ground contact, impossible cantilever, missing contact shadow, shadow direction inconsistent with key light, duplicated product, extra objects not in the prompt, unreadable text, watermark, fake logo, barcode, QR code, certification marks, messy background, over-stylized fantasy scene, cartoon style, illustration style, oil painting texture, watercolor effect, sketch lines, grainy noise, chromatic aberration, lens flare artifacts, motion blur, double exposure, HDR overprocessing, oversaturated colors, color cast, skin-like texture on non-organic products, clay-like shading, plastic toy appearance.""",
         ]
+        if user_desc:
+            lines.append(f"""USER INTENT: {user_desc}. Incorporate this as the primary product description and design intent. This describes the product to be featured in the poster. Do not override the reference image's product identity, but use this text to understand the product category, target audience, and key selling points.""")
         return "\n".join(item for item in lines if item)
 
     def _build_zoo_prompt(

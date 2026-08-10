@@ -48,6 +48,27 @@ def _extract_industry(project_node: WorkspaceNode | None) -> str:
     return "装备制造"
 
 
+def _string_from_bucket(bucket: dict[str, object] | None, key: str) -> str:
+    if not isinstance(bucket, dict):
+        return ""
+    value = bucket.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _promotion_source_metadata(node: WorkspaceNode) -> tuple[str, str]:
+    source_image_url = (
+        _string_from_bucket(node.output_data, "sourceImageUrl")
+        or _string_from_bucket(node.ui_data, "sourceImageUrl")
+        or _string_from_bucket(node.input_data, "referenceImageUrl")
+    )
+    source_node_title = (
+        _string_from_bucket(node.output_data, "sourceNodeTitle")
+        or _string_from_bucket(node.ui_data, "sourceNodeTitle")
+        or "设计图"
+    )
+    return source_image_url, source_node_title
+
+
 class WorkspaceTurnError(Exception):
     def __init__(self, message: str, status_code: int = 500) -> None:
         super().__init__(message)
@@ -452,8 +473,8 @@ class WorkspaceTurnService:
             db, user_id=user_id, conversation_id=conversation.id
         )
         project_node = next((n for n in all_nodes if n.node_type == "project"), None)
-        project_name = project_node.title if project_node else "未命名项目"
-        project_id = project_node.project_id if project_node else None
+        project_name = project_node.title if project_node else conversation.title or "未命名项目"
+        project_id = project_node.project_id if project_node else node.project_id or conversation.project_id
 
         if action_type in {"confirm", "complete", "accept"}:
             node = workspace_graph_service.update_node(
@@ -650,6 +671,87 @@ class WorkspaceTurnService:
                     package_text
                     + "\n建议先点击「生成 3D 模型」或「生成 CAD」建立可打包的模型结果。"
                 )
+
+        elif action_type in {"regenerate_scene", "adjust_style"}:
+            source_image_url, source_node_title = _promotion_source_metadata(node)
+            if not source_image_url:
+                raise WorkspaceTurnError(
+                    "请先生成或选择一张设计图，宣发图必须基于设计图进行图片编辑。",
+                    400,
+                )
+            action_prompt = (
+                "沿用同一张设计图，换一个更适合商业展示的宣发场景。"
+                if action_type == "regenerate_scene"
+                else "沿用同一张设计图，调整宣发图的光线、质感和整体风格。"
+            )
+            render_node = workspace_graph_service.create_node(
+                db,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                node_type="render",
+                status="queued",
+                title=f"宣发图「{project_name}」",
+                summary=action_prompt,
+                project_id=project_id,
+                parent_id=node.id,
+                agent_key="render_agent",
+                input_data={
+                    "requirement": node.summary,
+                    "imagePrompt": action_prompt,
+                    "referenceImageUrl": source_image_url,
+                },
+                output_data={
+                    "renderMode": "promotion",
+                    "sourceImageUrl": source_image_url,
+                    "sourceNodeTitle": source_node_title,
+                },
+                ui_data={
+                    "renderMode": "promotion",
+                    "sourceImageUrl": source_image_url,
+                    "sourceNodeTitle": source_node_title,
+                },
+            )
+            created.append(render_node)
+            self._pending_launches.append(
+                {
+                    "kind": "render",
+                    "node_id": str(render_node.id),
+                    "user_id": user_id,
+                    "conversation_id": str(conversation.id),
+                    "project_name": project_name,
+                    "requirement_text": node.summary,
+                    "direction_image_prompt": action_prompt,
+                    "industry": _extract_industry(project_node),
+                }
+            )
+            assistant_text = (
+                f"已基于同一张设计图「{source_node_title}」提交新的宣发图图片编辑任务。"
+            )
+
+        elif action_type == "generate_copy":
+            copy_node = workspace_graph_service.create_node(
+                db,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                node_type="status",
+                status="completed",
+                title=f"海报文案「{project_name}」",
+                summary=(
+                    f"{project_name}\n"
+                    "核心卖点：延续当前设计语言，突出材质质感、使用场景与产品价值。\n"
+                    "建议标题：让设计进入真实生活场景。"
+                ),
+                project_id=project_id,
+                parent_id=node.id,
+                input_data={"sourceNodeId": str(node.id)},
+                output_data={
+                    "copyType": "poster",
+                    "headline": "让设计进入真实生活场景",
+                    "sellingPoints": ["材质质感", "场景融合", "产品价值"],
+                },
+            )
+            created.append(copy_node)
+            assistant_text = "已生成一版海报文案，并保存到当前项目工作节点。"
 
         elif action_type in {"select", "choose"}:
             node = workspace_graph_service.update_node(

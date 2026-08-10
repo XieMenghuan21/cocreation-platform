@@ -5,7 +5,7 @@ import logging
 import os
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -13,6 +13,8 @@ from app.config.settings import settings
 from app.services.nodapi_chat_service import nodapi_chat_service
 
 logger = logging.getLogger(__name__)
+
+PromptTask = Literal["poster", "exploded", "fake_3d", "design_board", "plan_2d", "lighting", "default"]
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,84 @@ PROMPT_REFERENCES: tuple[PromptReference, ...] = (
         category="设计汇报图",
         prompt="design review presentation board, multiple view angles, detail callouts, color palette swatch, typography hierarchy, professional layout",
         tags=("汇报", "展板", "多视图", "细节", "配色", "排版"),
+    ),
+    PromptReference(
+        source="ComfyUI-2d-multiview-design-sheet",
+        category="二维多视图设计图",
+        prompt="2D technical design sheet, front view, side view, rear view, top view, bottom view, orthographic layout, dimension annotations, material callouts, clean white background",
+        tags=("设计图", "二维", "多视图", "上视图", "下视图", "正视图", "侧视图", "工程图"),
+    ),
+    PromptReference(
+        source="IndustrialDesign-orthographic-six-view",
+        category="工业设计六视图",
+        prompt="orthographic six-view industrial design board, front elevation, rear elevation, left side view, right side view, top plan view, bottom view, equal scale, aligned centerlines, dimension chains, radius notes, material callouts, exploded detail insets, manufacturable proportions",
+        tags=("设计图", "六视图", "正视图", "后视图", "左视图", "右视图", "上视图", "下视图", "尺寸标注", "工业设计"),
+    ),
+    PromptReference(
+        source="ProductDesign-ID-sketch-board",
+        category="产品设计说明图",
+        prompt="industrial design specification board, product silhouette locked, front side top bottom views, detail callouts, section cut detail, texture swatches, color material finish board, clean annotations, white background, precise product proportions",
+        tags=("设计图", "说明图", "CMF", "材质", "剖面", "细节", "产品比例"),
+    ),
+    PromptReference(
+        source="CAD-2d-orthographic-multiview",
+        category="2D 平面图",
+        prompt="2D orthographic multi-view engineering drawing of the same reference product, front view, rear view, left side view, right side view, top view, bottom view, aligned centerlines, consistent scale, dimension chains, material callouts, hidden edges as dashed lines, clean white drafting background, no scene, no product redesign",
+        tags=("2D平面图", "平面图", "六视图", "正视图", "侧视图", "上视图", "下视图", "尺寸", "线稿"),
+    ),
+    PromptReference(
+        source="Drafting-2d-elevation-plan",
+        category="二维制图",
+        prompt="technical drafting style, single orthographic view, clean vector-like black lines, exact proportions, hidden edges as dashed lines, dimension arrows, labels, white paper background, no 3D perspective, no scene, no shadows",
+        tags=("二维", "制图", "单视图", "虚线", "尺寸线", "无透视"),
+    ),
+    PromptReference(
+        source="ComfyUI-reference-poster-edit",
+        category="参考图海报编辑",
+        prompt="image editing workflow, cut out the exact reference product, preserve geometry and material, composite into advertising poster layout, commercial lighting, headline space, no product redesign",
+        tags=("图片编辑", "抠图", "宣传", "海报", "场景融合", "广告", "参考图"),
+    ),
+    PromptReference(
+        source="Reference-image-subject-lock",
+        category="图上图主体锁定",
+        prompt="reference image subject lock, use the uploaded image as the only identity source, preserve product silhouette, proportions, structural seams, color placement, material finish, ports, handles, supports, visible edges, no redesign, no new product, no unrelated variant",
+        tags=("图片编辑", "图生图", "参考图", "主体锁定", "不改产品", "保形"),
+    ),
+    PromptReference(
+        source="Scene-fusion-product-edit",
+        category="场景融合图",
+        prompt="scene fusion image edit, cut out exact reference product, composite into realistic usage scene, match perspective scale horizon lighting color temperature and contact shadows, product sits on a real surface, background supports the product story, no pasted look",
+        tags=("场景融合", "图片编辑", "合成", "真实场景", "透视", "阴影"),
+    ),
+    PromptReference(
+        source="ComfyUI-flat-exploded-diagram",
+        category="平面爆炸拆解图",
+        prompt="flat 2D exploded assembly diagram, components separated, assembly order, thin connector lines, numbered callouts, clean technical illustration, white background",
+        tags=("爆炸图", "拆解", "分解", "装配", "平面图", "结构"),
+    ),
+    PromptReference(
+        source="Exploded-view-constraint-template",
+        category="爆炸图约束",
+        prompt="derive components from the original reference product only, separate outer shell panels internal modules fasteners rails hinges gaskets handles supports, align each part to original connection points, use connector lines and numbered callouts, no random fragments, no fantasy internals",
+        tags=("爆炸图", "参考图", "拆解", "部件", "连接点", "编号"),
+    ),
+    PromptReference(
+        source="ComfyUI-faux-3d-isometric",
+        category="二维仿3D效果图",
+        prompt="2D image, faux 3D industrial product render, isometric view, three-quarter view, technical shading, accurate silhouette, no real 3D mesh",
+        tags=("3D", "仿3D", "等轴测", "三分之四", "效果图", "二维"),
+    ),
+    PromptReference(
+        source="Faux-3d-reference-preservation",
+        category="二维仿3D参考图保形",
+        prompt="faux 3D image edit from reference, preserve exact product identity, rotate presentation only if plausible, keep same panels ports handles seams colors and proportions, use isometric shadow and ambient occlusion, do not generate CAD mesh or a different object",
+        tags=("仿3D", "参考图", "保形", "等轴测", "不是CAD"),
+    ),
+    PromptReference(
+        source="ComfyUI-technology-lighting",
+        category="科技光效",
+        prompt="blue technology glow, rim light, softbox key light, product halo, subtle volumetric light, reflective highlights, clean premium advertising style",
+        tags=("光效", "蓝色", "科技", "轮廓光", "发光", "灯光"),
     ),
     PromptReference(
         source="Stable-3D-render",
@@ -314,8 +394,8 @@ class ImagePromptOptimizerService:
         model: str | None = None,
     ) -> dict[str, Any]:
         clean_prompt = self._normalize_prompt(prompt)
-        references = self.search(clean_prompt, limit=5)
-        examples = self.search_examples(clean_prompt, limit=3)
+        references = self.search(clean_prompt, limit=8)
+        examples = self.search_examples(clean_prompt, limit=4)
 
         # ── 知识库检索 ──
         kb_hits: list[PromptReference] = []
@@ -356,11 +436,13 @@ class ImagePromptOptimizerService:
             en_prompt = str(ai_optimized.get("en") or "").strip()
             if not zh_prompt:
                 zh_prompt = en_prompt
+            zh_prompt = self._enforce_task_prompt(clean_prompt, zh_prompt, images=images, model=model)
+            en_prompt = self._enforce_comfyui_task_prompt(clean_prompt, en_prompt or zh_prompt, images=images)
             return {
                 "originalPrompt": clean_prompt,
                 "optimizedPrompt": zh_prompt,
                 "finalPrompt": zh_prompt,
-                "comfyuiPrompt": en_prompt or zh_prompt,
+                "comfyuiPrompt": en_prompt,
                 "enabled": True,
                 "aiOptimized": True,
                 "references": [item.to_dict() for item in all_references],
@@ -368,7 +450,7 @@ class ImagePromptOptimizerService:
 
         # 回退：规则拼接（中文展示 + 英文生图）
         optimized_prompt = self._build_optimized_prompt(clean_prompt, all_references, images=images, model=model)
-        comfyui_prompt = self._build_comfyui_prompt(clean_prompt)
+        comfyui_prompt = self._build_comfyui_prompt(clean_prompt, images=images)
         return {
             "originalPrompt": clean_prompt,
             "optimizedPrompt": optimized_prompt,
@@ -390,24 +472,24 @@ class ImagePromptOptimizerService:
     ) -> str | None:
         """调用 NodAPI 对话接口优化图片生成提示词。"""
         reference_hints = "\n".join(
-            f"- [{r.category}] {r.prompt}" for r in references[:3]
+            f"- [{r.category}] {r.prompt}" for r in references[:8]
         ) if references else "无"
         example_hints = "\n".join(
-            f"- [{item.scene}] {item.title}: {item.prompt}" for item in examples[:3]
+            f"- [{item.scene}] {item.title}: {item.prompt}" for item in examples[:4]
         ) if examples else "无"
 
         system_prompt = (
             "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 输出为设计稿（design specification sheet），不是产品摄影图。包含：正视图、侧视图、顶视图、局部细节。\n"
-            "2. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构。\n"
-            "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
-            "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
-            "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. zh：中文提示词，包含产品名、材质、尺寸、多视图描述和质量词（展示给用户看）。\n"
-            "7. en：英文提示词，把 zh 完整翻译成地道的英文生图提示词，面向 Stable Diffusion / ComfyUI，逗号分隔标签式写法，包含 product、material、perspective、lighting、style（真正发给生图模型用）。\n"
-            "8. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
-            "9. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
+            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/仿3D=必须基于参考图的图片编辑。\n"
+            "2. 设计图必须包含正视图、后视图、左视图、右视图、上视图、下视图、尺寸标注、材质标注、局部细节，不是单张产品摄影。\n"
+            "3. 2D平面图必须锁定参考图原物体，输出正视图、后视图、左视图、右视图、上视图、下视图和尺寸标注；只展示这个物体，不能出现生活场景、海报排版或重新设计。\n"
+            "4. 图上图任务必须写明参考图是唯一产品身份来源，保留原产品轮廓、比例、材质、接缝、接口、把手、支撑件，禁止重新设计。\n"
+            "5. 爆炸图必须基于原图拆解真实可见部件，零件分离、引线、编号、装配顺序清楚，禁止随机幻想内部结构。\n"
+            "6. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构；如有尺寸数据必须原样保留。\n"
+            "7. en 必须是真正发给 Stable Diffusion / ComfyUI 的长英文 Prompt，至少包含 subject lock、structure、physical plausibility、materials、lighting/camera/layout、negative prompt。\n"
+            "8. zh：中文提示词，展示给用户看；en：英文提示词，必须地道、完整、逗号/分段均可。\n"
+            "9. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
         )
 
         user_message = (
@@ -475,24 +557,24 @@ class ImagePromptOptimizerService:
     ) -> str:
         """调用 OpenAI-compatible 对话接口优化图片生成提示词。"""
         reference_hints = "\n".join(
-            f"- [{r.category}] {r.prompt}" for r in references[:3]
+            f"- [{r.category}] {r.prompt}" for r in references[:8]
         ) if references else "无"
         example_hints = "\n".join(
-            f"- [{item.scene}] {item.title}: {item.prompt}" for item in examples[:3]
+            f"- [{item.scene}] {item.title}: {item.prompt}" for item in examples[:4]
         ) if examples else "无"
 
         system_prompt = (
             "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 输出为设计稿（design specification sheet），不是产品摄影图。包含：正视图、侧视图、顶视图、局部细节。\n"
-            "2. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构。\n"
-            "3. 标注材质说明（material callout）、表面处理（finish）、颜色方案。\n"
-            "4. 补充工业设计质量词：orthographic projection, engineering drawing style, dimension annotation, material callout, clean line work, white background, technical presentation layout, multi-view arrangement。\n"
-            "5. 如有尺寸数据，在 prompt 中保留具体数值。\n"
-            "6. zh：中文提示词，包含产品名、材质、尺寸、多视图描述和质量词（展示给用户看）。\n"
-            "7. en：英文提示词，把 zh 完整翻译成地道的英文生图提示词，面向 Stable Diffusion / ComfyUI，逗号分隔标签式写法，包含 product、material、perspective、lighting、style（真正发给生图模型用）。\n"
-            "8. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
-            "9. 保持简洁：用户只提供了基础信息就不要扩写成复杂描述。\n"
+            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/仿3D=必须基于参考图的图片编辑。\n"
+            "2. 设计图必须包含正视图、后视图、左视图、右视图、上视图、下视图、尺寸标注、材质标注、局部细节，不是单张产品摄影。\n"
+            "3. 2D平面图必须锁定参考图原物体，输出正视图、后视图、左视图、右视图、上视图、下视图和尺寸标注；只展示这个物体，不能出现生活场景、海报排版或重新设计。\n"
+            "4. 图上图任务必须写明参考图是唯一产品身份来源，保留原产品轮廓、比例、材质、接缝、接口、把手、支撑件，禁止重新设计。\n"
+            "5. 爆炸图必须基于原图拆解真实可见部件，零件分离、引线、编号、装配顺序清楚，禁止随机幻想内部结构。\n"
+            "6. 保留用户指定的产品名、材质、尺寸，严禁虚构功能或结构；如有尺寸数据必须原样保留。\n"
+            "7. en 必须是真正发给 Stable Diffusion / ComfyUI 的长英文 Prompt，至少包含 subject lock、structure、physical plausibility、materials、lighting/camera/layout、negative prompt。\n"
+            "8. zh：中文提示词，展示给用户看；en：英文提示词，必须地道、完整、逗号/分段均可。\n"
+            "9. 只输出 JSON，不要多余解释，格式：{\"zh\": \"中文提示词\", \"en\": \"English prompt\"}。\n"
         )
 
         user_message = (
@@ -581,17 +663,26 @@ class ImagePromptOptimizerService:
         return {"zh": normalized, "en": ImagePromptOptimizerService._build_comfyui_prompt(normalized)}
 
     @staticmethod
-    def _build_comfyui_prompt(prompt: str) -> str:
+    def _build_comfyui_prompt(prompt: str, *, images: list[str] | None = None) -> str:
         """中文生图提示词无法直接用 AD/SD 时，用英文质量词模板兜底。"""
         text = re.sub(r"\s+", " ", prompt).strip()
         if not text:
             return ""
+        task = ImagePromptOptimizerService._classify_prompt_task(text, images=images)
+        subject = ImagePromptOptimizerService._english_subject_prompt(text, task=task)
+        task_prompt = ImagePromptOptimizerService._task_comfyui_template(task, has_reference=bool(images))
+        detailed_task_prompt = ImagePromptOptimizerService._detailed_comfyui_prompt(text, task=task, has_reference=bool(images))
+        product_common_sense = ImagePromptOptimizerService._product_common_sense_comfyui(text)
         quality = (
             "industrial design concept render, orthographic projection, engineering drawing style, "
             "dimension annotation, material callout, clean line work, white background, "
             "technical presentation layout, multi-view arrangement, high detail, sharp focus"
         )
-        return f"{text}, {quality}"
+        negative = (
+            "negative prompt: blurry, distorted product, redesigned product, wrong proportions, "
+            "extra objects, unreadable text, watermark, logo artifacts, messy background"
+        )
+        return "\n".join(part for part in (subject, task_prompt, detailed_task_prompt, product_common_sense, quality, negative) if part)
 
     def search(self, prompt: str, *, limit: int = 5) -> list[PromptReference]:
         tokens = self._tokenize(prompt)
@@ -655,6 +746,9 @@ class ImagePromptOptimizerService:
             "无水印",
             "无乱码文字",
         ]
+        task = self._classify_prompt_task(prompt, images=images)
+        quality_phrases.extend(self._task_quality_phrases(task, has_reference=bool(images)))
+        quality_phrases.extend(self._product_common_sense_phrases(prompt))
         if self._looks_like_ecommerce(prompt):
             quality_phrases.extend(["电商主图构图", "商品居中", "适合平台商品卡片"])
         if self._looks_like_furniture(prompt):
@@ -677,9 +771,388 @@ class ImagePromptOptimizerService:
         ]
         return "\n".join(part for part in parts if part.strip())
 
+    def _enforce_task_prompt(
+        self,
+        original_prompt: str,
+        optimized_prompt: str,
+        *,
+        images: list[str] | None,
+        model: str | None,
+    ) -> str:
+        """AI 优化可用时仍追加平台硬约束，避免 ComfyUI 输出类型跑偏。"""
+        task = self._classify_prompt_task(original_prompt, images=images)
+        required_phrases = self._task_quality_phrases(task, has_reference=bool(images))
+        required_phrases.extend(self._product_common_sense_phrases(original_prompt))
+        if model and "midjourney" in model.lower():
+            required_phrases.append("--ar 3:2")
+        missing = [phrase for phrase in required_phrases if phrase not in optimized_prompt]
+        if not missing:
+            return optimized_prompt
+        return "\n".join(
+            part
+            for part in (
+                optimized_prompt,
+                "平台硬约束：" + "，".join(self._dedupe_phrases(missing)),
+            )
+            if part.strip()
+        )
+
+    @staticmethod
+    def _enforce_comfyui_task_prompt(
+        original_prompt: str,
+        comfyui_prompt: str,
+        *,
+        images: list[str] | None,
+    ) -> str:
+        task = ImagePromptOptimizerService._classify_prompt_task(original_prompt, images=images)
+        required = ImagePromptOptimizerService._task_comfyui_template(task, has_reference=bool(images))
+        detailed = ImagePromptOptimizerService._detailed_comfyui_prompt(original_prompt, task=task, has_reference=bool(images))
+        if detailed and detailed not in required:
+            required = "\n".join(part for part in (required, detailed) if part)
+        product_common_sense = ImagePromptOptimizerService._product_common_sense_comfyui(original_prompt)
+        if product_common_sense and product_common_sense not in required:
+            required = "\n".join(part for part in (required, product_common_sense) if part)
+        if re.search(r"[\u4e00-\u9fff]", comfyui_prompt):
+            comfyui_prompt = ImagePromptOptimizerService._english_subject_prompt(original_prompt, task=task)
+        if not required or required in comfyui_prompt:
+            return comfyui_prompt
+        negative = (
+            "negative prompt: blurry, distorted product, redesigned product, wrong proportions, "
+            "extra objects, unreadable text, watermark, logo artifacts, messy background"
+        )
+        return "\n".join(part for part in (comfyui_prompt.strip(), required, negative) if part)
+
+    @staticmethod
+    def _english_subject_prompt(prompt: str, *, task: PromptTask) -> str:
+        lower = prompt.lower()
+        product_map = (
+            ("沙发", "fabric sofa product"),
+            ("布艺沙发", "fabric sofa product"),
+            ("椅", "chair product"),
+            ("茶几", "coffee table product"),
+            ("桌", "table product"),
+            ("衣柜", "wardrobe product"),
+            ("书柜", "bookcase product"),
+            ("床", "bed product"),
+            ("灯", "lighting product"),
+            ("手机支架", "rabbit-shaped mobile phone stand product"),
+            ("手机架", "mobile phone stand product"),
+            ("支架", "product support stand"),
+            ("控制柜", "industrial control cabinet product"),
+            ("机柜", "industrial cabinet product"),
+            ("电源", "portable power station product"),
+            ("设备", "industrial equipment product"),
+            ("产品", "product"),
+        )
+        subject = "the requested industrial product"
+        for zh_keyword, english_subject in product_map:
+            if zh_keyword in prompt:
+                subject = english_subject
+                break
+        english_phrases = re.findall(r"[a-zA-Z][a-zA-Z0-9 _\\-]{2,}", lower)
+        if english_phrases:
+            subject = " ".join(phrase.strip() for phrase in english_phrases if phrase.strip())[:160]
+        task_prefixes: dict[PromptTask, str] = {
+            "poster": "Create an image-edit advertising poster for",
+            "exploded": "Create a flat technical exploded diagram for",
+            "fake_3d": "Create a 2D faux-3D product visualization for",
+            "design_board": "Create a 2D multi-view industrial design sheet for",
+            "plan_2d": "Create a reference-locked 2D orthographic multi-view engineering drawing for",
+            "lighting": "Create a product image with controlled blue technology lighting for",
+            "default": "Create an industrial design image for",
+        }
+        return f"{task_prefixes[task]} {subject}"
+
+    @staticmethod
+    def _product_common_sense_phrases(prompt: str) -> list[str]:
+        phrases = [
+            "通用产品常识",
+            "产品必须符合真实重力和支撑关系",
+            "接触点必须有对应阴影",
+            "结构比例必须符合使用场景",
+            "功能件必须安装在合理位置",
+        ]
+        if any(keyword in prompt for keyword in ("手机支架", "手机架", "phone stand", "mobile phone stand")):
+            phrases.extend([
+                "手机支架常识",
+                "手机必须稳定放在托架凹槽或挡边上",
+                "手机不能穿模",
+                "手机与支架接触关系清楚",
+                "支架比例符合常规手机尺寸",
+                "不悬浮",
+            ])
+        if any(keyword in prompt for keyword in ("沙发", "椅", "座椅", "凳", "sofa", "chair", "seat")):
+            phrases.extend([
+                "座椅/沙发常识",
+                "坐垫靠背扶手连接合理",
+                "所有支脚或底座必须稳定接触地面",
+                "软包厚度和缝线符合真实家具",
+            ])
+        if any(keyword in prompt for keyword in ("桌", "茶几", "餐桌", "边几", "table", "desk")):
+            phrases.extend([
+                "桌几常识",
+                "桌面必须水平且厚度合理",
+                "桌腿必须连接桌面底部并稳定落地",
+                "桌面物体不能穿透桌面",
+            ])
+        if any(keyword in prompt for keyword in ("柜", "衣柜", "书柜", "机柜", "控制柜", "cabinet", "wardrobe", "bookcase")):
+            phrases.extend([
+                "柜体常识",
+                "门板抽屉层板对齐",
+                "铰链把手和开合方向合理",
+                "柜体必须垂直稳定且有真实板厚",
+            ])
+        if any(keyword in prompt for keyword in ("灯", "台灯", "落地灯", "lamp", "light")):
+            phrases.extend([
+                "灯具常识",
+                "发光源必须位于灯头或灯罩内部",
+                "灯杆灯臂底座连接稳定",
+                "光照方向必须与阴影一致",
+            ])
+        if any(keyword in prompt for keyword in ("电源", "储能", "充电", "电池", "设备", "充电宝", "power station", "battery", "charger")):
+            phrases.extend([
+                "电子设备常识",
+                "接口屏幕按钮必须排列在面板上",
+                "外壳厚度散热孔提手位置合理",
+                "线缆只能插入接口不能穿过外壳",
+            ])
+        if any(keyword in prompt for keyword in ("工业", "机械", "钣金", "装备", "industrial", "machine", "sheet metal")):
+            phrases.extend([
+                "工业设备常识",
+                "螺丝铰链散热孔检修门位置合理",
+                "钣金折弯和装配缝隙清楚",
+                "结构必须可制造不可随机开洞",
+            ])
+        return ImagePromptOptimizerService._dedupe_phrases(phrases)
+
+    @staticmethod
+    def _product_common_sense_comfyui(prompt: str) -> str:
+        constraints = [
+            "GENERAL PRODUCT COMMON SENSE: obey real gravity, real contact points, physically plausible scale, functional parts in believable positions, matching contact shadows, no floating object, no surface clipping, no merged parts",
+        ]
+        if any(keyword in prompt for keyword in ("手机支架", "手机架", "phone stand", "mobile phone stand")):
+            constraints.append(
+                "realistic mobile phone stand geometry, phone rests on the cradle or front lip, "
+                "clear contact points between phone and stand, no intersection, no clipping, no floating phone, "
+                "stand size fits a normal smartphone, stable support angle, physically plausible gravity and shadows"
+            )
+        if any(keyword in prompt for keyword in ("沙发", "椅", "座椅", "凳", "sofa", "chair", "seat")):
+            constraints.append(
+                "SEATING COMMON SENSE: seat cushions aligned on the frame, backrest connected to the seat, armrests attached on both sides when present, legs or base fully touching the floor, believable upholstery thickness, seams follow cushion edges"
+            )
+        if any(keyword in prompt for keyword in ("桌", "茶几", "餐桌", "边几", "table", "desk")):
+            constraints.append(
+                "TABLE COMMON SENSE: tabletop is level and has believable thickness, legs connect to the underside of the tabletop, all legs touch the floor, objects rest on top of the surface and never penetrate through it"
+            )
+        if any(keyword in prompt for keyword in ("柜", "衣柜", "书柜", "机柜", "控制柜", "cabinet", "wardrobe", "bookcase")):
+            constraints.append(
+                "CABINET COMMON SENSE: doors drawers and shelves aligned to the cabinet grid, visible panel thickness, hinges and handles placed on usable edges, cabinet stands vertically with stable base, no impossible openings"
+            )
+        if any(keyword in prompt for keyword in ("灯", "台灯", "落地灯", "lamp", "light")):
+            constraints.append(
+                "LAMP COMMON SENSE: light source located inside the lamp head or shade, stable base and visible support arm, cable or switch placed plausibly, emitted light direction matches cast shadows"
+            )
+        if any(keyword in prompt for keyword in ("电源", "储能", "充电", "电池", "设备", "充电宝", "power station", "battery", "charger")):
+            constraints.append(
+                "ELECTRONIC DEVICE COMMON SENSE: ports aligned on the front panel, screen and buttons flush with the housing, handle attached to the main body, vents follow a consistent grid, cables plug into ports and never pass through the shell"
+            )
+        if any(keyword in prompt for keyword in ("工业", "机械", "钣金", "装备", "industrial", "machine", "sheet metal")):
+            constraints.append(
+                "INDUSTRIAL PRODUCT COMMON SENSE: bolts hinges vents access panels and reinforcement ribs placed logically, sheet metal bends and assembly seams visible, manufacturable wall thickness, no random holes or decorative mechanical noise"
+            )
+        return "\n".join(constraints)
+
+    @staticmethod
+    def _detailed_comfyui_prompt(prompt: str, *, task: PromptTask, has_reference: bool) -> str:
+        subject = ImagePromptOptimizerService._english_subject_prompt(prompt, task=task)
+        reference_block = (
+            "REFERENCE IMAGE USAGE: use the uploaded reference image as the identity source. Extract the main product "
+            "shape from the reference. Preserve silhouette, proportions, color placement, material finish, structural seams, "
+            "decorative motif, support feet, joints, edges, and all recognizable design features. Treat reference strength as high. "
+            "Only change the surrounding environment, lighting, camera angle, and poster composition."
+            if has_reference
+            else "REFERENCE IMAGE USAGE: no reference image is available, keep the design conservative and physically plausible."
+        )
+        if task == "poster":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Create a realistic commercial product poster, not a fantasy illustration.",
+                    "SUBJECT LOCK: the product must remain the same object throughout the image. Do not replace it with a new design, do not add extra variants, do not change the rabbit/product silhouette, do not alter the functional support geometry.",
+                    reference_block,
+                    "PRODUCT STRUCTURE: show a stable base, visible back support, front retaining lip or cradle groove, rounded safe edges, manufacturable thickness, believable molded plastic or soft-touch material, clean seams, no melted surfaces, no twisted geometry.",
+                    "PHYSICAL PLAUSIBILITY: all objects must obey gravity. The phone rests on the cradle or front lip with visible contact points. The phone and stand must never intersect, clip through each other, merge into each other, float, or sit at an impossible angle. Shadows must match every contact point.",
+                    "MATERIAL AND SURFACE: use realistic product-grade ABS plastic or silicone coating, subtle micro texture, soft specular highlights, clean bevels, no dirty noise, no waxy skin texture, no cartoon clay unless explicitly requested.",
+                    "COMPOSITION: hero product centered or slightly off-center, three-quarter front angle, clear outline, enough negative space for headline and selling points, premium ecommerce poster layout, balanced foreground and background depth.",
+                    "SCENE: modern desk or minimal lifestyle scene, phone stand placed on a flat table surface, optional phone mounted naturally, simple props only if they do not block the product, no clutter.",
+                    "LIGHTING: large softbox key light from upper front-left, soft fill light, subtle rim light on product edge, controlled reflections, realistic contact shadow under the stand, no harsh blown highlights.",
+                    "CAMERA AND LENS: 70mm product photography lens, eye-level to slightly elevated view, natural perspective compression, sharp focus on product, shallow background depth only if the product edge stays crisp.",
+                    "POSTER GRAPHIC RULES: leave clean blank space for headline; avoid generating readable brand text unless provided; no fake logos, no watermark, no random letters, no QR code, no messy typography.",
+                    "QUALITY TARGET: premium ecommerce hero image, physically believable, clean geometry, high detail, realistic shadow, professional product photography, market-ready advertising visual.",
+                    "NEGATIVE EMPHASIS: deformed phone, phone penetrating stand, impossible support, floating phone, duplicated stand, extra limbs, wrong animal form, warped product, melted plastic, unreadable text, watermark, overbusy background.",
+                ]
+            )
+        if task == "design_board":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Produce a precise 2D technical design sheet.",
+                    "VIEW REQUIREMENT: include front view, rear view, left side view, right side view, top view, bottom view, and two enlarged detail callout panels. This is a multi-view design drawing, not a single top-down floor plan.",
+                    "LAYOUT: clean orthographic grid, white background, consistent scale across views, dimension lines, material callouts, part labels, no perspective scene.",
+                    "ENGINEERING PLAUSIBILITY: keep all views consistent with the same product geometry, no contradictory shapes between top and side views, no impossible joints.",
+                    "STYLE: industrial design presentation board, crisp edges, thin annotation lines, subtle material swatches, restrained typography blocks without unreadable text.",
+                ]
+            )
+        if task == "plan_2d":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Produce a reference-locked 2D orthographic multi-view engineering drawing.",
+                    reference_block,
+                    "SUBJECT LOCK: the original reference image is the identity source. Keep the same product silhouette, proportions, frame, panels, handles, ports, hinges, wheels, supports, color/material separation, and recognizable design features. Do not redesign the product or replace it with a generic object.",
+                    "VIEW REQUIREMENT: show front view, rear view, left side view, right side view, top view, and bottom view of the same product. All views must align to consistent scale with shared centerlines and matching geometry.",
+                    "LAYOUT: clean white drafting background, black vector-like linework, dimension arrows, centerlines, dashed hidden edges, material/structure callouts, optional two small detail insets. Only the product object is shown.",
+                    "STRICT DIFFERENCE FROM POSTER OR SCENE: no room scene, no outdoor background, no lifestyle props, no marketing headline, no product photography, no perspective camera, no unrelated variants.",
+                    "ENGINEERING PLAUSIBILITY: dimensions remain consistent across views, structural features line up correctly, no decorative random lines, no impossible geometry.",
+                ]
+            )
+        if task == "exploded":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Produce a flat 2D exploded assembly diagram.",
+                    reference_block,
+                    "SUBJECT LOCK: derive every visible component from the original product form. Do not invent fantasy internal parts, do not turn it into a different machine, do not create random fragments.",
+                    "ASSEMBLY LOGIC: separate parts along a clear vertical or diagonal assembly axis, preserve the complete product silhouette relationship, show how each part connects.",
+                    "ANNOTATION: numbered callouts, thin connector lines, grouped components, clean spacing, no photorealistic lifestyle background.",
+                    "PHYSICAL PLAUSIBILITY: parts must align to real connection points, no random floating fragments, no impossible component scale.",
+                ]
+            )
+        if task == "fake_3d":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Generate a 2D faux-3D product visualization only.",
+                    reference_block,
+                    "SUBJECT LOCK: keep the same panels, ports, handles, seams, feet, supports, colors, materials, and proportions from the reference product. Only change viewpoint and lighting.",
+                    "VIEW: isometric or three-quarter front view, technical shading to imply volume, clean silhouette, accurate visible edges.",
+                    "LIMITATION: this is a bitmap image, not CAD, not mesh, not STL, not GLB. Do not show a 3D software viewport.",
+                    "QUALITY: believable industrial design render, realistic materials, contact shadow, no impossible geometry.",
+                ]
+            )
+        if task == "lighting":
+            return "\n".join(
+                [
+                    f"DETAILED GENERATION BRIEF: {subject}. Add controlled product lighting without changing the product.",
+                    "LIGHTING DESIGN: blue technology glow, rim light along the silhouette, softbox key light, subtle volumetric beam, realistic reflections.",
+                    "CONTROL: keep the light effect elegant and physically attached to scene lighting, not random neon blobs.",
+                ]
+            )
+        return ""
+
     @staticmethod
     def _normalize_prompt(prompt: str) -> str:
         return re.sub(r"\s+", " ", prompt).strip()
+
+    @staticmethod
+    def _classify_prompt_task(prompt: str, *, images: list[str] | None = None) -> PromptTask:
+        lower = prompt.lower()
+        if any(keyword in prompt for keyword in ("海报", "宣传", "宣发", "广告", "电商图", "主图", "场景融合")) or any(
+            keyword in lower for keyword in ("poster", "advertising", "campaign", "hero banner")
+        ):
+            return "poster"
+        if ImagePromptOptimizerService._looks_like_exploded(prompt):
+            return "exploded"
+        if any(keyword in prompt for keyword in ("光效", "发光", "灯效", "轮廓光", "科技光")) or any(
+            keyword in lower for keyword in ("glow", "lighting", "rim light", "light effect")
+        ):
+            return "lighting"
+        if any(keyword in prompt for keyword in ("3D", "三维", "模型", "建模", "3d")) or any(
+            keyword in lower for keyword in ("3d", "modeling", "mesh", "isometric")
+        ):
+            return "fake_3d"
+        if any(keyword in prompt for keyword in ("2D平面图", "2d平面图", "二维平面图", "平面图", "俯视平面", "俯视图")) or any(
+            keyword in lower for keyword in ("2d plan", "plan drawing", "top-down plan", "top down plan")
+        ):
+            return "plan_2d"
+        if any(
+            keyword in prompt
+            for keyword in (
+                "设计图", "工程图", "三视图", "六视图", "多视图", "上视图", "下视图", "顶视图",
+                "底视图", "正视图", "侧视图", "后视图", "图纸",
+            )
+        ) or any(keyword in lower for keyword in ("design sheet", "orthographic", "front view", "top view", "bottom view")):
+            return "design_board"
+        if images:
+            return "poster"
+        return "default"
+
+    @staticmethod
+    def _task_quality_phrases(task: PromptTask, *, has_reference: bool) -> list[str]:
+        if task == "poster":
+            phrases = [
+                "图片编辑",
+                "抠出参考图原产品",
+                "保持原产品结构比例材质",
+                "海报版式",
+                "商业宣传构图",
+                "预留标题和卖点文案区域",
+            ]
+            if has_reference:
+                phrases.append("不得重新设计成不同产品")
+            return phrases
+        if task == "exploded":
+            return ["平面爆炸拆解图", "二维工程插画", "零件分离清晰", "装配顺序明确", "编号标注和引线清楚"]
+        if task == "fake_3d":
+            return ["二维仿3D", "等轴测或三分之四视角", "技术阴影塑造体积", "保留产品轮廓", "不生成真实网格模型"]
+        if task == "design_board":
+            return ["二维设计图板", "正视图", "侧视图", "后视图", "上视图", "下视图", "尺寸标注", "材质标注", "白底排版"]
+        if task == "plan_2d":
+            return ["2D 平面图", "基于参考图", "同一个物体", "正视图", "后视图", "左视图", "右视图", "上视图", "下视图", "尺寸箭头", "虚线隐藏边", "不要重新设计", "不要生活场景"]
+        if task == "lighting":
+            return ["光效", "边缘轮廓光", "蓝色科技光", "柔和主光", "产品高光和反射", "背景保持干净"]
+        return []
+
+    @staticmethod
+    def _task_comfyui_template(task: PromptTask, *, has_reference: bool) -> str:
+        if task == "poster":
+            reference_clause = (
+                "cut out the exact reference product, preserve its original geometry, proportions, color and material, "
+                "do not redesign the product, "
+                if has_reference
+                else "single product subject, preserve product geometry, "
+            )
+            return (
+                "image edit, "
+                f"{reference_clause}"
+                "composite the product into a premium advertising poster layout, commercial product poster, "
+                "headline space, selling point text blocks, clean brand visual hierarchy, studio lighting, realistic shadow"
+            )
+        if task == "exploded":
+            return (
+                "flat 2D exploded assembly diagram, components separated along assembly axis, "
+                "clear assembly order, thin connector lines, numbered callouts, technical illustration, "
+                "orthographic/isometric hybrid, white background, no photorealistic scene"
+            )
+        if task == "fake_3d":
+            return (
+                "2D image, faux 3D industrial product render, isometric view, three-quarter view, "
+                "technical shading, ambient occlusion style shadow, accurate silhouette, clean background, "
+                "no real 3D mesh, no CAD viewport"
+            )
+        if task == "design_board":
+            return (
+                "2D technical design sheet, orthographic multi-view layout, front view, side view, rear view, "
+                "top view, bottom view, detail close-up panels, dimension annotations, material callouts, "
+                "clean white background, design specification board"
+            )
+        if task == "plan_2d":
+            return (
+                "reference-locked 2D orthographic multi-view engineering drawing, same product from the reference image, "
+                "front view, rear view, left side view, right side view, top view, bottom view, consistent scale, aligned centerlines, "
+                "dimension arrows, material callouts, hidden edges as dashed lines, white drafting background, no scene, no product redesign"
+            )
+        if task == "lighting":
+            return (
+                "blue technology glow, controlled light effect, rim light, product halo, softbox key light, "
+                "subtle volumetric light, reflective highlights, premium product advertising lighting"
+            )
+        return ""
 
     @staticmethod
     def _tokenize(prompt: str) -> set[str]:
