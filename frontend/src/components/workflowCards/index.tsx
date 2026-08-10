@@ -260,7 +260,7 @@ export const DesignSchemeCard: React.FC<{
         <CardAction onClick={() => onPromote('render')}>宣传图</CardAction>
         <CardAction onClick={() => onPromote('scene_fusion')}>场景融合图</CardAction>
         <CardAction onClick={() => onPromote('explosion')}>爆炸图</CardAction>
-        <CardAction onClick={() => onPromote('3d')}>仿3D</CardAction>
+        <CardAction onClick={() => onPromote('3d')}>立体效果图</CardAction>
         <CardAction onClick={() => onPromote('cad')}>CAD图纸</CardAction>
         <CardAction onClick={() => onPromote('quote')}>报价</CardAction>
         <CardAction onClick={() => onPromote('package')}>工程包</CardAction>

@@ -128,7 +128,7 @@ def test_three_preview_flag_does_not_invoke_real_3d_chain() -> None:
     request = IndustrialDesignWorkflowRequest.model_validate(
         {
             "inputType": "text",
-            "text": "生成一个二维仿3D效果图",
+            "text": "生成一个二维立体效果图",
             "options": {
                 "generateCad": False,
                 "generateDrawing": False,

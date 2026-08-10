@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 class RenderAgentError(Exception):
     pass
+
+
+RenderMode = Literal["design", "promotion"]
 
 
 def _extract_asset_ids_from_urls(urls: list[str]) -> list[str]:
@@ -42,14 +46,23 @@ def build_render_request(
     direction_image_prompt: str | None,
     industry: str | None,
     reference_image_urls: list[str],
+    render_mode: RenderMode = "design",
 ) -> object:
-    """构造工业品设计工作流请求。"""
+    """构造工业品设计工作流请求。
+
+    render_mode="design"：文生图设计稿，不需要参考图，不启用图片编辑。
+    render_mode="promotion"：图生图宣发图，必须提供参考图，启用图片编辑。
+    """
     from app.schemas.industrial_design import (
         IndustrialDesignWorkflowOptions,
         IndustrialDesignWorkflowRequest,
     )
 
     text = direction_image_prompt or requirement_text
+    context: dict[str, object] = {}
+    if render_mode == "promotion":
+        context["imageEditMode"] = "poster"
+
     return IndustrialDesignWorkflowRequest(
         projectName=project_name,
         industry=industry or "装备制造",
@@ -65,9 +78,9 @@ def build_render_request(
             generatePlanLine=False,
             generateDrawing=False,
             generateRender=True,
-            enhanceImage=True,
+            enhanceImage=(render_mode == "promotion"),
         ),
-        context={"imageEditMode": "poster"},
+        context=context,
     )
 
 
@@ -269,8 +282,21 @@ class RenderAgent:
         requirement_text: str,
         direction_image_prompt: str | None,
         industry: str | None,
+        render_mode: RenderMode | None = None,
     ) -> WorkspaceNode:
-        """创建/更新 render 节点并启动后台工作流。"""
+        """创建/更新 render 节点并启动后台工作流。
+
+        render_mode 优先级：显式参数 > node.input_data > node.output_data > "design"。
+        - "design"：文生图设计稿，不需要参考图。
+        - "promotion"：图生图宣发图，必须基于已有设计图/参考图。
+        """
+        effective_mode = (
+            render_mode
+            or (node.input_data.get("renderMode") if isinstance(node.input_data, dict) else None)
+            or (node.output_data.get("renderMode") if isinstance(node.output_data, dict) else None)
+            or "design"
+        )
+
         if node.node_type != "render":
             node = workspace_graph_service.create_node(
                 db,
@@ -290,7 +316,9 @@ class RenderAgent:
             )
 
         reference_image_urls = _collect_reference_image_urls(db, node)
-        if not reference_image_urls:
+
+        # promotion 模式必须有参考图，否则直接失败
+        if effective_mode == "promotion" and not reference_image_urls:
             node = workspace_graph_service.update_node(
                 db,
                 node_id=node.id,
@@ -310,9 +338,13 @@ class RenderAgent:
             db.flush()
             return node
 
-        source_image_url, source_node_title = _resolve_source_image_metadata(db, node)
-        source_image_url = source_image_url or reference_image_urls[0]
-        source_node_title = source_node_title or "设计图"
+        # design 模式没有参考图也允许纯文生图
+        source_image_url: str | None = None
+        source_node_title: str | None = None
+        if reference_image_urls:
+            source_image_url, source_node_title = _resolve_source_image_metadata(db, node)
+            source_image_url = source_image_url or reference_image_urls[0]
+            source_node_title = source_node_title or "设计图"
 
         request = build_render_request(
             project_name=project_name,
@@ -320,6 +352,7 @@ class RenderAgent:
             direction_image_prompt=direction_image_prompt,
             industry=industry,
             reference_image_urls=reference_image_urls,
+            render_mode=effective_mode,
         )
         result = await industrial_design_workflow_service.create_workflow(
             request,
@@ -331,26 +364,31 @@ class RenderAgent:
             if wf_task is not None:
                 wf_task.workspace_node_id = node.id
                 wf_task.conversation_id = node.conversation_id
+
+            new_output: dict[str, object] = {
+                **dict(node.output_data or {}),
+                "renderMode": effective_mode,
+            }
+            new_ui: dict[str, object] = {
+                **dict(node.ui_data or {}),
+                "taskId": task_id,
+                "currentStep": result.get("currentStep") or "",
+                "renderMode": effective_mode,
+            }
+            if effective_mode == "promotion" and source_image_url:
+                new_output["sourceImageUrl"] = source_image_url
+                new_output["sourceNodeTitle"] = source_node_title
+                new_ui["sourceImageUrl"] = source_image_url
+                new_ui["sourceNodeTitle"] = source_node_title
+
             node = workspace_graph_service.update_node(
                 db,
                 node_id=node.id,
                 user_id=user_id,
                 task_id=task_id,
                 status="running",
-                output_data={
-                    **dict(node.output_data or {}),
-                    "renderMode": "promotion",
-                    "sourceImageUrl": source_image_url,
-                    "sourceNodeTitle": source_node_title,
-                },
-                ui_data={
-                    **dict(node.ui_data or {}),
-                    "taskId": task_id,
-                    "currentStep": result.get("currentStep") or "",
-                    "renderMode": "promotion",
-                    "sourceImageUrl": source_image_url,
-                    "sourceNodeTitle": source_node_title,
-                },
+                output_data=new_output,
+                ui_data=new_ui,
             ) or node
         db.flush()
         return node

@@ -41,6 +41,7 @@ def test_render_request_carries_reference_image_urls() -> None:
         direction_image_prompt="place the same sofa into a warm living room",
         industry="家具",
         reference_image_urls=[f"/api/v1/assets/{asset_id}/download"],
+        render_mode="promotion",
     )
 
     assert request.asset_ids == [asset_id]
@@ -83,7 +84,10 @@ async def test_render_agent_fails_without_reference_image(
             title="宣发图",
             summary="融合客厅场景",
             agent_key="render_agent",
-            input_data={"imagePrompt": "living room scene"},
+            input_data={
+                "imagePrompt": "living room scene",
+                "renderMode": "promotion",
+            },
         )
 
         result = await render_agent.launch_render(
@@ -152,7 +156,10 @@ async def test_render_agent_persists_source_image_metadata(
             title="宣发图",
             summary="融合客厅场景",
             agent_key="render_agent",
-            input_data={"imagePrompt": "living room scene"},
+            input_data={
+                "imagePrompt": "living room scene",
+                "renderMode": "promotion",
+            },
         )
 
         result = await render_agent.launch_render(

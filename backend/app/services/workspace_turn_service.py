@@ -77,9 +77,6 @@ class WorkspaceTurnError(Exception):
 
 
 class WorkspaceTurnService:
-    def __init__(self) -> None:
-        self._pending_launches: list[dict[str, object]] = []
-
     def _get_or_create_conversation(
         self,
         db: Session,
@@ -165,10 +162,8 @@ class WorkspaceTurnService:
         text = (request.text or "").strip()
         action = request.action
 
-        self._pending_launches = []
-
         if action and action.get("nodeId"):
-            result = await self._handle_action(
+            result, pending_launches = await self._handle_action(
                 db, conversation, auth_user, user_id, text, action
             )
         elif not text:
@@ -177,8 +172,9 @@ class WorkspaceTurnService:
             result = await self._handle_text(
                 db, conversation, auth_user, user_id, text, request.asset_ids
             )
+            pending_launches = []
 
-        for pending in self._pending_launches:
+        for pending in pending_launches:
             kind = str(pending.get("kind") or "")
             if kind == "render":
                 asyncio.create_task(
@@ -201,7 +197,6 @@ class WorkspaceTurnService:
                         pending=pending,
                     )
                 )
-        self._pending_launches = []
 
         return result
 
@@ -451,7 +446,7 @@ class WorkspaceTurnService:
         user_id: str,
         text: str,
         action: dict[str, object],
-    ) -> TurnResponse:
+    ) -> tuple[TurnResponse, list[dict[str, object]]]:
         node_id_raw = str(action.get("nodeId") or "")
         action_type = str(action.get("type") or "")
         try:
@@ -467,6 +462,7 @@ class WorkspaceTurnService:
 
         created: list[WorkspaceNode] = []
         updated: list[WorkspaceNode] = []
+        pending_launches: list[dict[str, object]] = []
         assistant_text = "收到。"
 
         all_nodes = workspace_graph_service.get_nodes(
@@ -552,11 +548,12 @@ class WorkspaceTurnService:
                     input_data={
                         "requirement": node.summary,
                         "imagePrompt": direction_image_prompt or "",
+                        "renderMode": "design",
                     },
                 )
                 created.append(render_node)
 
-                self._pending_launches.append(
+                pending_launches.append(
                     {
                         "kind": "render",
                         "node_id": str(render_node.id),
@@ -591,7 +588,7 @@ class WorkspaceTurnService:
                 },
             )
             created.append(model_node)
-            self._pending_launches.append(
+            pending_launches.append(
                 {
                     "kind": "model_3d",
                     "node_id": str(model_node.id),
@@ -621,7 +618,7 @@ class WorkspaceTurnService:
                 },
             )
             created.append(cad_node)
-            self._pending_launches.append(
+            pending_launches.append(
                 {
                     "kind": "cad",
                     "node_id": str(cad_node.id),
@@ -712,7 +709,7 @@ class WorkspaceTurnService:
                 },
             )
             created.append(render_node)
-            self._pending_launches.append(
+            pending_launches.append(
                 {
                     "kind": "render",
                     "node_id": str(render_node.id),
@@ -793,7 +790,7 @@ class WorkspaceTurnService:
                 "activeNodeId": str(created[-1].id) if created else str(node.id),
                 "previewNodeId": str(created[-1].id) if created and created[-1].node_type in {"render", "model_3d", "cad"} else None,
             },
-        )
+        ), pending_launches
 
     async def _launch_render_post_commit(
         self,

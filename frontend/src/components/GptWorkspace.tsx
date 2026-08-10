@@ -76,7 +76,7 @@ const ACTION_LABELS: Record<WorkflowActionKind, string> = {
   render: '宣传图',
   scene_fusion: '场景融合图',
   explosion: '爆炸图',
-  '3d': '仿3D效果图',
+  '3d': '立体效果图',
   cad: 'CAD图纸',
   quote: '报价',
   package: '工程包',
@@ -88,7 +88,7 @@ const NEXT_STEP_RECOMMENDATIONS = [
   { label: '宣传图', agent: 'render', icon: 'ImageIcon', action: 'render' as const },
   { label: '场景融合图', agent: 'scene_fusion', icon: 'Layers', action: 'scene_fusion' as const },
   { label: '爆炸图', agent: 'explosion', icon: 'Boxes', action: 'explosion' as const },
-  { label: '仿3D效果图', agent: '3d', icon: 'Box', action: '3d' as const },
+  { label: '立体效果图', agent: '3d', icon: 'Box', action: '3d' as const },
   { label: 'CAD 图纸', agent: 'cad', icon: 'FileText', action: 'cad' as const },
   { label: '报价', agent: 'quote', icon: 'Calculator', action: 'quote' as const },
   { label: '工程包', agent: 'package', icon: 'Package', action: 'package' as const },
@@ -453,7 +453,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
               {
                 key: 'referenceImage',
                 label: '参考图',
-                hint: '上传设计图、商品图、草图或竞品参考图后，再生成2D平面图/宣传图/场景融合/爆炸图/仿3D。',
+                hint: '上传设计图、商品图、草图或竞品参考图后，再生成2D平面图/宣传图/场景融合/爆炸图/立体效果图。',
                 collected: Boolean(collectedMaterialsRef.current.referenceAssetId),
               },
             ],
@@ -860,7 +860,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
             {
               key: 'referenceImage',
               label: '参考图',
-              hint: '宣传图、场景融合图、爆炸图、仿3D都必须上传设计图/商品图/草图后再生成。',
+              hint: '宣传图、场景融合图、爆炸图、立体效果图都必须上传设计图/商品图/草图后再生成。',
             },
           ]
         : [
@@ -885,7 +885,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           collected: collectedMaterialsRef.current,
           required: needsReferenceImage,
           description: needsReferenceImage
-            ? `图上图任务必须先上传参考图。没有参考图时，请先生成「设计图」，再继续做2D平面图、宣传图、场景融合图、爆炸图或仿3D。`
+            ? `图上图任务必须先上传参考图。没有参考图时，请先生成「设计图」，再继续做2D平面图、宣传图、场景融合图、爆炸图或立体效果图。`
             : undefined,
         },
       });
@@ -1370,7 +1370,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           : actionKind === 'plan_2d'
             ? `${intentText || intent?.projectName || '产品'}。基于原始设计图生成2D多视图平面工程图：同一个物体必须包含正视图、后视图、左侧视图、右侧视图、上视图、下视图、关键尺寸、比例标尺、材料/结构标注；只展示这个物体，不要场景，不要重新设计，不要改变原图主体。`
           : actionKind === '3d'
-          ? `${intentText || intent?.projectName || '产品'}。生成二维仿3D效果图，等轴测或三分之四视角，不生成真实3D网格模型。`
+          ? `${intentText || intent?.projectName || '产品'}。生成二维立体效果图，等轴测或三分之四视角，不生成真实3D网格模型。`
           : actionKind === 'explosion'
             ? `${intentText || intent?.projectName || '产品'}。基于原始设计图生成二维平面爆炸拆解图，必须保留原产品轮廓、比例、结构关系和材质特征。`
           : actionKind === 'scene_fusion'
@@ -1423,8 +1423,8 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
         resultText = '2D平面图已生成。';
         resultCard = { id: `${statusId}-plan-2d`, type: 'design_scheme', data: { schemeId: `plan_2d`, name: '2D平面图', thumbnails: renderUrl ? [renderUrl] : [], materials: [], estimatedPrice: null, renderUrl: renderUrl || null, drawingUrl: cad2dUrl || null, outputs } };
       } else if (actionKind === '3d' && renderUrl) {
-        resultText = '仿3D效果图已生成。';
-        resultCard = { id: `${statusId}-3d`, type: 'design_scheme', data: { schemeId: `3d`, name: '仿3D效果图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
+        resultText = '立体效果图已生成。';
+        resultCard = { id: `${statusId}-3d`, type: 'design_scheme', data: { schemeId: `3d`, name: '立体效果图', thumbnails: [renderUrl], materials: [], estimatedPrice: null, renderUrl, drawingUrl: null, outputs } };
       } else if (actionKind === 'cad' && cad2dUrl) {
         resultText = '2D CAD 图纸已生成。';
         resultCard = { id: `${statusId}-cad`, type: 'design_scheme', data: { schemeId: `cad`, name: '2D CAD 图纸', thumbnails: [], materials: [], estimatedPrice: null, renderUrl: null, drawingUrl: cad2dUrl || modelUrl, outputs } };
@@ -1441,8 +1441,7 @@ export const GptWorkspace: React.FC<GptWorkspaceProps> = ({
           resultCard = { id: `${statusId}-explosion`, type: 'design_scheme', data: { schemeId: `explosion`, name: '爆炸图', thumbnails: [explosionUrl], materials: [], estimatedPrice: null, renderUrl: explosionUrl, drawingUrl: null, outputs } };
         }
       } else if (actionKind === 'quote') {
-        resultText = '报价参考已生成。';
-        resultCard = { id: `${statusId}-quote`, type: 'quote', data: { quoteId: `Q-${statusId.slice(-6)}`, schemeName: '方案A', materialCost: 8500, productionCost: 6200, totalInternal: 14700, totalCustomer: 19800 } };
+        resultText = '报价已生成，请查看详情。';
       } else if (['design_sheet', 'plan_2d', 'render', 'scene_fusion', 'explosion', '3d', 'cad'].includes(actionKind)) {
         throw new Error(`${actionLabel}执行完成，但没有返回有效图片或图纸结果。`);
       } else {

@@ -216,15 +216,15 @@ PROMPT_REFERENCES: tuple[PromptReference, ...] = (
     ),
     PromptReference(
         source="ComfyUI-faux-3d-isometric",
-        category="二维仿3D效果图",
+        category="二维立体效果图",
         prompt="2D image, faux 3D industrial product render, isometric view, three-quarter view, technical shading, accurate silhouette, no real 3D mesh",
-        tags=("3D", "仿3D", "等轴测", "三分之四", "效果图", "二维"),
+        tags=("3D", "立体效果", "等轴测", "三分之四", "效果图", "二维"),
     ),
     PromptReference(
         source="Faux-3d-reference-preservation",
-        category="二维仿3D参考图保形",
+        category="二维立体参考图保形",
         prompt="faux 3D image edit from reference, preserve exact product identity, rotate presentation only if plausible, keep same panels ports handles seams colors and proportions, use isometric shadow and ambient occlusion, do not generate CAD mesh or a different object",
-        tags=("仿3D", "参考图", "保形", "等轴测", "不是CAD"),
+        tags=("立体效果", "参考图", "保形", "等轴测", "不是CAD"),
     ),
     PromptReference(
         source="ComfyUI-technology-lighting",
@@ -481,7 +481,7 @@ class ImagePromptOptimizerService:
         system_prompt = (
             "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/仿3D=必须基于参考图的图片编辑。\n"
+            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/立体效果图=必须基于参考图的图片编辑。\n"
             "2. 设计图必须包含正视图、后视图、左视图、右视图、上视图、下视图、尺寸标注、材质标注、局部细节，不是单张产品摄影。\n"
             "3. 2D平面图必须锁定参考图原物体，输出正视图、后视图、左视图、右视图、上视图、下视图和尺寸标注；只展示这个物体，不能出现生活场景、海报排版或重新设计。\n"
             "4. 图上图任务必须写明参考图是唯一产品身份来源，保留原产品轮廓、比例、材质、接缝、接口、把手、支撑件，禁止重新设计。\n"
@@ -566,7 +566,7 @@ class ImagePromptOptimizerService:
         system_prompt = (
             "你是工业设计图片生成提示词优化师。根据用户产品需求，生成高质量工业设计稿提示词。\n"
             "要求：\n"
-            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/仿3D=必须基于参考图的图片编辑。\n"
+            "1. 先判断输出类型：设计图=多视图设计板；2D平面图=基于参考图的2D多视图工程图；宣传图/场景融合/爆炸图/立体效果图=必须基于参考图的图片编辑。\n"
             "2. 设计图必须包含正视图、后视图、左视图、右视图、上视图、下视图、尺寸标注、材质标注、局部细节，不是单张产品摄影。\n"
             "3. 2D平面图必须锁定参考图原物体，输出正视图、后视图、左视图、右视图、上视图、下视图和尺寸标注；只展示这个物体，不能出现生活场景、海报排版或重新设计。\n"
             "4. 图上图任务必须写明参考图是唯一产品身份来源，保留原产品轮廓、比例、材质、接缝、接口、把手、支撑件，禁止重新设计。\n"
@@ -1099,7 +1099,7 @@ class ImagePromptOptimizerService:
         if task == "exploded":
             return ["平面爆炸拆解图", "二维工程插画", "零件分离清晰", "装配顺序明确", "编号标注和引线清楚"]
         if task == "fake_3d":
-            return ["二维仿3D", "等轴测或三分之四视角", "技术阴影塑造体积", "保留产品轮廓", "不生成真实网格模型"]
+            return ["二维立体效果图", "等轴测或三分之四视角", "技术阴影塑造体积", "保留产品轮廓", "不生成真实网格模型"]
         if task == "design_board":
             return ["二维设计图板", "正视图", "侧视图", "后视图", "上视图", "下视图", "尺寸标注", "材质标注", "白底排版"]
         if task == "plan_2d":

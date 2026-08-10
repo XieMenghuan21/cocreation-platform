@@ -80,7 +80,7 @@ async def test_fake_3d_prompt_is_routed_to_2d_isometric_render(monkeypatch: pyte
 
     result = await service.optimize(prompt="给这个产品生成3D模型效果图")
 
-    assert "二维仿3D" in result["optimizedPrompt"]
+    assert "二维立体效果图" in result["optimizedPrompt"]
     assert "等轴测" in result["optimizedPrompt"]
     assert "不生成真实网格模型" in result["optimizedPrompt"]
     assert "2D image" in result["comfyuiPrompt"]
